@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import torch
@@ -434,13 +435,12 @@ def main() -> int:
         src_videos = {s["video"]: s for s in merged["sources"]}
         current_src = None
         for ch in merged["chunks"]:
-            src = ch["source_video"]
+            src = ch.get("source_video", "unknown")
             if src != current_src:
                 current_src = src
                 meta = src_videos[src]
                 shot_str = ""
                 if meta.get("shot_at"):
-                    from datetime import datetime
                     try:
                         dt = datetime.fromisoformat(meta["shot_at"].replace("Z", "+00:00"))
                         shot_str = f" — {dt.strftime('%b %-d, %-I:%M %p')}"
