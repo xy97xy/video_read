@@ -205,3 +205,15 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Worktrees
+.worktrees/
+
+# Project-specific
+output/
+cache/
+smolvlm2_space/
+*.MOV
+*.mp4
+
+eval/
