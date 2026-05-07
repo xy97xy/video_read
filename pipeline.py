@@ -243,6 +243,8 @@ def concat_chunks(
                 seen.append(ch["source_video"])
         src_index = {src: i for i, src in enumerate(seen)}
     else:
+        if video_path is None:
+            raise ValueError("video_path is required when chunks lack source_video field")
         seen = [video_path]
         src_index = {video_path: 0}
 
