@@ -255,6 +255,33 @@ def concat_chunks(
     log.info(f"wrote {output_path} ({kept:.1f}s from {len(scenes)} chunks)")
 
 
+def merge_chunks_json(chunk_files: list[str]) -> dict:
+    """Merge per-video chunk files into one combined dict sorted by shot_at."""
+    sources_data = []
+    for path in chunk_files:
+        with open(path) as f:
+            data = json.load(f)
+        sources_data.append(data)
+
+    def src_sort_key(d):
+        return (0, d["shot_at"]) if d.get("shot_at") else (1, d["video"])
+    sources_data.sort(key=src_sort_key)
+
+    sources = [{"video": d["video"], "shot_at": d.get("shot_at"), "duration": d["duration"]}
+               for d in sources_data]
+
+    all_chunks = []
+    for d in sources_data:
+        all_chunks.extend(d["chunks"])
+
+    for idx, chunk in enumerate(all_chunks):
+        chunk["index"] = idx
+
+    speech = {d["video"]: d.get("speech", []) for d in sources_data}
+
+    return {"sources": sources, "chunks": all_chunks, "speech": speech}
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -325,6 +352,11 @@ def main() -> int:
                    help="Snap cut points to sentence boundaries (default: on)")
     c.add_argument("--no-speech-aware", dest="speech_aware", action="store_false")
 
+    # merge mode
+    m = sub.add_parser("merge", help="combine per-video chunks.json → all_chunks.json")
+    m.add_argument("--output-dir", required=True, help="Dir containing *_chunks.json files")
+    m.add_argument("--output", required=True, help="Path to write all_chunks.json")
+
     args = p.parse_args()
 
     if args.mode == "describe":
@@ -380,6 +412,47 @@ def main() -> int:
             log.info("no speech data in chunks.json — cutting without speech snapping")
         concat_chunks(data["video"], chunks, selected, args.output,
                       speech=use_speech, video_duration=duration)
+
+    elif args.mode == "merge":
+        chunk_files = sorted(
+            p for p in Path(args.output_dir).glob("*_chunks.json")
+            if p.name != "all_chunks.json"
+        )
+        if not chunk_files:
+            log.error(f"no *_chunks.json files found in {args.output_dir}")
+            return 1
+        log.info(f"merging {len(chunk_files)} chunk file(s)...")
+        merged = merge_chunks_json([str(f) for f in chunk_files])
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        with open(args.output, "w") as f:
+            json.dump(merged, f, indent=2)
+        log.info(f"wrote {args.output}")
+
+        # Print combined summary grouped by source
+        print("\n--- COMBINED CHUNK SUMMARY ---")
+        speech_by_src = merged["speech"]
+        src_videos = {s["video"]: s for s in merged["sources"]}
+        current_src = None
+        for ch in merged["chunks"]:
+            src = ch["source_video"]
+            if src != current_src:
+                current_src = src
+                meta = src_videos[src]
+                shot_str = ""
+                if meta.get("shot_at"):
+                    from datetime import datetime
+                    try:
+                        dt = datetime.fromisoformat(meta["shot_at"].replace("Z", "+00:00"))
+                        shot_str = f" — {dt.strftime('%b %-d, %-I:%M %p')}"
+                    except ValueError:
+                        shot_str = f" — {meta['shot_at']}"
+                print(f"\n=== {Path(src).name}{shot_str} ===")
+            src_speech = speech_by_src.get(src, [])
+            spoken = speech_in_range(src_speech, ch["start"], ch["end"])
+            speech_tag = f" [speech: {' / '.join(spoken)[:60]}]" if spoken else ""
+            print(f"[{ch['index']}] {ch['start']:.1f}s-{ch['end']:.1f}s:{speech_tag}")
+            print(f"     {ch['description'][:100]}...")
+        print(f"\nRun: python pipeline.py cut --chunks-json {args.output} --selected 0,1,2 --output highlight.mp4")
 
     return 0
 

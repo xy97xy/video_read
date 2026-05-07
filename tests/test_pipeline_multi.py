@@ -76,3 +76,36 @@ def test_describe_output_includes_source_video_and_shot_at(tmp_path):
     loaded = json.loads(chunks_path.read_text())
     assert loaded["shot_at"] == "2025-11-16T20:19:29-0800"
     assert loaded["chunks"][0]["source_video"] == "/path/video.MOV"
+
+
+from pipeline import merge_chunks_json
+
+def _make_chunk_file(tmp_path, stem, video_path, shot_at, chunks):
+    data = {"video": video_path, "shot_at": shot_at, "duration": 30.0,
+            "chunks": chunks, "speech": [{"start": 1.0, "end": 2.0, "text": "hi", "words": []}]}
+    p = tmp_path / f"{stem}_chunks.json"
+    p.write_text(json.dumps(data))
+    return str(p)
+
+def test_merge_chunks_json_sorts_by_shot_at(tmp_path):
+    f1 = _make_chunk_file(tmp_path, "vid1", "/v1.MOV", "2025-11-16T20:21:00-0800",
+                          [{"start": 0.0, "end": 10.0, "source_video": "/v1.MOV", "description": "b"}])
+    f2 = _make_chunk_file(tmp_path, "vid2", "/v2.MOV", "2025-11-16T20:19:00-0800",
+                          [{"start": 0.0, "end": 10.0, "source_video": "/v2.MOV", "description": "a"}])
+    result = merge_chunks_json([f1, f2])
+    assert result["chunks"][0]["source_video"] == "/v2.MOV"  # earlier shot_at first
+    assert result["chunks"][0]["index"] == 0
+    assert result["chunks"][1]["index"] == 1
+
+def test_merge_chunks_json_speech_keyed_by_source(tmp_path):
+    f1 = _make_chunk_file(tmp_path, "vid1", "/v1.MOV", "2025-11-16T20:19:00-0800",
+                          [{"start": 0.0, "end": 10.0, "source_video": "/v1.MOV", "description": "x"}])
+    result = merge_chunks_json([f1])
+    assert "/v1.MOV" in result["speech"]
+
+def test_merge_chunks_json_excludes_all_chunks(tmp_path):
+    f1 = _make_chunk_file(tmp_path, "vid1", "/v1.MOV", "2025-11-16T20:19:00-0800",
+                          [{"start": 0.0, "end": 5.0, "source_video": "/v1.MOV", "description": "x"}])
+    (tmp_path / "all_chunks.json").write_text('{"sources":[],"chunks":[],"speech":{}}')
+    result = merge_chunks_json([f1])
+    assert len(result["chunks"]) == 1
