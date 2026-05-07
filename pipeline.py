@@ -277,6 +277,29 @@ def get_shot_at(video_path: str) -> str | None:
     )
 
 
+VIDEO_EXTS = {".mov", ".mp4", ".MOV", ".MP4"}
+
+def collect_videos(videos: list[str], video_dir: str | None) -> list[dict]:
+    """Return sorted list of {video, shot_at} dicts from explicit list and/or directory."""
+    paths = [str(Path(v).resolve()) for v in videos]
+    if video_dir:
+        for p in sorted(Path(video_dir).iterdir()):
+            if p.suffix in VIDEO_EXTS and str(p.resolve()) not in paths:
+                paths.append(str(p.resolve()))
+
+    entries = []
+    for p in paths:
+        shot_at = get_shot_at(p)
+        if shot_at is None:
+            log.warning(f"no timestamp metadata for {Path(p).name} — using filename order")
+        entries.append({"video": p, "shot_at": shot_at})
+
+    def sort_key(e):
+        return (0, e["shot_at"]) if e["shot_at"] else (1, e["video"])
+
+    return sorted(entries, key=sort_key)
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="mode", required=True)
