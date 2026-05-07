@@ -1,0 +1,136 @@
+---
+name: video-highlight-pipeline
+description: Use when creating highlight reels from travel or action videos using the local AI pipeline in this repo. Covers single-video (describe → select → cut) and multi-video (batch → merge → select → cut) workflows.
+---
+
+# Video Highlight Pipeline
+
+## Overview
+
+Local pipeline: describe video chunks with AI + transcribe speech, then cut selected chunks into a highlight reel with speech-aware boundaries. Supports single videos and multi-video batch processing.
+
+## Step 0: Gather inputs before running anything
+
+Ask the user:
+1. **Single or multiple videos?**
+   - Single video → ask for video path, output dir, highlight goal → follow **Single-Video Flow** below
+   - Multiple videos / directory → ask for video directory (or list of files), output dir, highlight goal → follow **Multi-Video Flow** below
+
+Do not proceed until you have all inputs.
+
+---
+
+## Single-Video Flow
+
+### Step 1: Describe
+
+```bash
+source venv/bin/activate
+python pipeline.py describe \
+  --video <video_path> \
+  --output <output_dir>/chunks.json \
+  --max-chunk-seconds 10
+```
+
+- TransNetV2 detects scene boundaries (frame-accurate, ~1s to run)
+- Each scene/chunk described by Qwen2.5-VL 7B (~12s per chunk)
+- faster-whisper transcribes audio with word-level timestamps (~2s for 1min clip)
+- Single continuous shot → falls back to 10s time-based chunks automatically
+
+**Key flags:**
+- `--scene-threshold 0.5` — lower = more sensitive to cuts
+- `--max-chunk-seconds 30` — use for multi-scene footage with real cuts
+- `--no-transcribe` — skip audio transcription
+- `--whisper-model base` — whisper model size (tiny/base/small/medium/large)
+
+After it finishes, read `<output_dir>/chunks.json` and show the user a full summary table.
+The output already includes speech tags — show them prominently:
+
+| # | Time | Speech | Description |
+|---|------|--------|-------------|
+| 0 | 0s-10s | "You see the first clip..." | ... |
+| 1 | 10s-20s | (none) | ... |
+
+### Step 2: Select
+
+Based on the user's highlight goal and the chunk descriptions, select the best chunks. Explain your choices briefly. Ask the user to confirm or adjust before cutting.
+
+### Step 3: Cut
+
+```bash
+python pipeline.py cut \
+  --chunks-json <output_dir>/chunks.json \
+  --selected 0,2,5 \
+  --output <output_dir>/highlight.mp4
+```
+
+Chunks are always concatenated in chronological order.
+
+Speech-aware cutting is on by default: if a chunk boundary falls mid-sentence, the cut point automatically snaps to the nearest sentence gap (±0.3s margin). Use `--no-speech-aware` to disable.
+
+## Single Continuous Shot vs Multi-Scene
+
+| Footage type | TransNetV2 result | Strategy |
+|---|---|---|
+| Multi-scene (travel clips) | Many scenes | Describe per scene, pick best |
+| Single continuous shot | 1 scene | Split into 10s chunks, pick most visually distinct |
+
+## VRAM Notes
+
+- Qwen 7B 4-bit uses ~5-6GB VRAM — fits on RTX 3070
+- `expandable_segments` is already set inside `pipeline.py`
+- If OOM: restart the Python process to fully clear VRAM
+- faster-whisper uses ~500MB on GPU (CUDA 12 cublas path is baked into `venv/bin/activate`)
+
+## Common Issues
+
+| Problem | Fix |
+|---|---|
+| OOM on model load | Restart process — previous run may still hold VRAM |
+| Chunks extend past video duration | Fixed in `detect_scenes()` via duration cap |
+| All chunks look the same | Single continuous shot — pick based on camera angle, subject, or lighting variety |
+| TransNetV2 finds no scenes | Normal for uncut footage — chunking falls back to time-based |
+| Whisper CUDA error (libcublas.so.12) | `source venv/bin/activate` — the activate script sets LD_LIBRARY_PATH; whisper also auto-falls back to CPU |
+
+---
+
+## Multi-Video Flow
+
+### Step 1: Batch describe (unattended, resumable)
+
+```bash
+source venv/bin/activate
+python pipeline.py batch \
+  --video-dir <video_dir> \
+  --output-dir <output_dir> \
+  --max-chunk-seconds 10
+```
+
+If the user has specific files rather than a directory: add `--videos file1.MOV file2.MOV` (additive with `--video-dir`).
+
+This runs unattended — Qwen processes each video sequentially (~12s/chunk). If interrupted, re-run the same command — already-described videos are skipped automatically. iPhone MOV files are sorted by real shot timestamp from metadata.
+
+### Step 2: Merge
+
+```bash
+python pipeline.py merge \
+  --output-dir <output_dir> \
+  --output <output_dir>/all_chunks.json
+```
+
+Read `<output_dir>/all_chunks.json` and show the user the combined summary table grouped by source video with real shot timestamps (e.g. "Nov 16, 8:19 PM").
+
+### Step 3: Select
+
+Based on the highlight goal and chunk descriptions, select chunks. Group your explanation by source video. Ask the user to confirm before cutting.
+
+### Step 4: Cut
+
+```bash
+python pipeline.py cut \
+  --chunks-json <output_dir>/all_chunks.json \
+  --selected 0,3,7,12 \
+  --output <output_dir>/highlight.mp4
+```
+
+Chunks are cut from their original source videos and concatenated in the order specified by `--selected`. Speech-aware boundary snapping is on by default.
