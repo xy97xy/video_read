@@ -341,7 +341,19 @@ def main() -> int:
         if args.transcribe:
             speech = transcribe_audio(args.video, model_size=args.whisper_model)
 
-        out = {"video": args.video, "duration": duration, "chunks": chunks, "speech": speech}
+        # tag each chunk with its source video
+        video_abs = str(Path(args.video).resolve())
+        for chunk in chunks:
+            chunk["source_video"] = video_abs
+
+        shot_at = get_shot_at(args.video)
+        out = {
+            "video": video_abs,
+            "shot_at": shot_at,
+            "duration": duration,
+            "chunks": chunks,
+            "speech": speech,
+        }
         with open(args.output, "w") as f:
             json.dump(out, f, indent=2)
         log.info(f"wrote {args.output}")

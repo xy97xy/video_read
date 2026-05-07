@@ -58,3 +58,21 @@ def test_collect_videos_falls_back_to_filename_sort_when_no_timestamp(tmp_path):
     with patch("pipeline.get_shot_at", return_value=None):
         result = collect_videos(videos=[], video_dir=str(tmp_path))
     assert result[0]["video"] == str(v1)
+
+def test_describe_output_includes_source_video_and_shot_at(tmp_path):
+    """chunks.json written by describe must have source_video on each chunk and shot_at at top level."""
+    chunks_path = tmp_path / "chunks.json"
+    data = {
+        "video": "/path/video.MOV",
+        "shot_at": "2025-11-16T20:19:29-0800",
+        "duration": 20.0,
+        "chunks": [
+            {"start": 0.0, "end": 10.0, "source_video": "/path/video.MOV", "description": "x"},
+            {"start": 10.0, "end": 20.0, "source_video": "/path/video.MOV", "description": "y"},
+        ],
+        "speech": [],
+    }
+    chunks_path.write_text(json.dumps(data))
+    loaded = json.loads(chunks_path.read_text())
+    assert loaded["shot_at"] == "2025-11-16T20:19:29-0800"
+    assert loaded["chunks"][0]["source_video"] == "/path/video.MOV"
