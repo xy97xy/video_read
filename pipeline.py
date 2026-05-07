@@ -358,6 +358,17 @@ def main() -> int:
     m.add_argument("--output-dir", required=True, help="Dir containing *_chunks.json files")
     m.add_argument("--output", required=True, help="Path to write all_chunks.json")
 
+    # batch mode
+    b = sub.add_parser("batch", help="describe multiple videos → per-video chunks.json files")
+    b.add_argument("--video-dir", default=None, help="Dir to scan for .MOV/.mp4 files")
+    b.add_argument("--videos", nargs="*", default=[], help="Explicit video paths (additive with --video-dir)")
+    b.add_argument("--output-dir", required=True, help="Dir to write <stem>_chunks.json files")
+    b.add_argument("--scene-threshold", type=float, default=0.5)
+    b.add_argument("--max-chunk-seconds", type=int, default=MAX_CHUNK_SECONDS)
+    b.add_argument("--transcribe", action="store_true", default=True)
+    b.add_argument("--no-transcribe", dest="transcribe", action="store_false")
+    b.add_argument("--whisper-model", default="base")
+
     args = p.parse_args()
 
     if args.mode == "describe":
@@ -453,6 +464,62 @@ def main() -> int:
             print(f"[{ch['index']}] {ch['start']:.1f}s-{ch['end']:.1f}s:{speech_tag}")
             print(f"     {ch['description'][:100]}...")
         print(f"\nRun: python pipeline.py cut --chunks-json {args.output} --selected 0,1,2 --output highlight.mp4")
+
+    elif args.mode == "batch":
+        entries = collect_videos(videos=args.videos, video_dir=args.video_dir)
+        if not entries:
+            log.error("no videos found — provide --video-dir or --videos")
+            return 1
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+
+        model, processor = load_qwen()
+
+        for i, entry in enumerate(entries):
+            video_path = entry["video"]
+            stem = Path(video_path).stem
+            out_path = Path(args.output_dir) / f"{stem}_chunks.json"
+
+            if out_path.exists():
+                log.info(f"[{i+1}/{len(entries)}] skipping {stem} (already done)")
+                continue
+
+            shot_str = ""
+            if entry.get("shot_at"):
+                try:
+                    dt = datetime.fromisoformat(entry["shot_at"].replace("Z", "+00:00"))
+                    shot_str = f" — {dt.strftime('%b %-d, %-I:%M %p')}"
+                except ValueError:
+                    shot_str = f" — {entry['shot_at']}"
+            log.info(f"[{i+1}/{len(entries)}] {stem}{shot_str}")
+
+            duration = get_duration(video_path)
+            scenes = detect_scenes(video_path, threshold=args.scene_threshold, duration=duration)
+            chunks = split_long_scenes(scenes, max_chunk=args.max_chunk_seconds)
+            log.info(f"  {len(scenes)} scenes → {len(chunks)} chunks")
+
+            chunks = describe_all(model, processor, video_path, chunks)
+
+            speech = []
+            if args.transcribe:
+                speech = transcribe_audio(video_path, model_size=args.whisper_model)
+
+            video_abs = str(Path(video_path).resolve())
+            for chunk in chunks:
+                chunk["source_video"] = video_abs
+
+            out_data = {
+                "video": video_abs,
+                "shot_at": entry.get("shot_at"),
+                "duration": duration,
+                "chunks": chunks,
+                "speech": speech,
+            }
+            with open(out_path, "w") as f:
+                json.dump(out_data, f, indent=2)
+            log.info(f"  wrote {out_path} ({len(chunks)} chunks)")
+
+        log.info("batch complete")
+        print(f"\nRun: python pipeline.py merge --output-dir {args.output_dir} --output {args.output_dir}/all_chunks.json")
 
     return 0
 
