@@ -480,8 +480,13 @@ def main() -> int:
             out_path = Path(args.output_dir) / f"{stem}_chunks.json"
 
             if out_path.exists():
-                log.info(f"[{i+1}/{len(entries)}] skipping {stem} (already done)")
-                continue
+                try:
+                    with open(out_path) as _f:
+                        json.load(_f)
+                    log.info(f"[{i+1}/{len(entries)}] skipping {stem} (already done)")
+                    continue
+                except (json.JSONDecodeError, OSError):
+                    log.warning(f"[{i+1}/{len(entries)}] {stem}_chunks.json is corrupt — re-processing")
 
             shot_str = ""
             if entry.get("shot_at"):
@@ -503,7 +508,7 @@ def main() -> int:
             if args.transcribe:
                 speech = transcribe_audio(video_path, model_size=args.whisper_model)
 
-            video_abs = str(Path(video_path).resolve())
+            video_abs = video_path  # already resolved by collect_videos()
             for chunk in chunks:
                 chunk["source_video"] = video_abs
 
