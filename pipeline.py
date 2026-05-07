@@ -223,37 +223,61 @@ def snap_to_silence(t: float, speech: list[dict], video_duration: float, margin:
 
 
 def concat_chunks(
-    video_path: str,
+    video_path: str | None,
     chunks: list[dict],
     selected: list[int],
     output_path: str,
-    speech: list[dict] | None = None,
+    speech: list[dict] | dict | None = None,
     video_duration: float = 0.0,
 ) -> None:
-    raw_scenes = [(chunks[i]["start"], chunks[i]["end"]) for i in selected]
-    if not raw_scenes:
+    selected_chunks = [chunks[i] for i in selected]
+    if not selected_chunks:
         log.warning("no chunks selected — nothing to cut")
         return
 
-    if speech:
-        scenes = [(snap_to_silence(s, speech, video_duration), snap_to_silence(e, speech, video_duration))
-                  for s, e in raw_scenes]
+    has_source = all("source_video" in ch for ch in selected_chunks)
+    if has_source:
+        seen = []
+        for ch in selected_chunks:
+            if ch["source_video"] not in seen:
+                seen.append(ch["source_video"])
+        src_index = {src: i for i, src in enumerate(seen)}
     else:
-        scenes = raw_scenes
+        seen = [video_path]
+        src_index = {video_path: 0}
 
     parts, inputs = [], []
-    for i, (s, e) in enumerate(scenes):
-        parts.append(f"[0:v]trim=start={s}:end={e},setpts=PTS-STARTPTS[v{i}];")
-        parts.append(f"[0:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}];")
+    for i, ch in enumerate(selected_chunks):
+        src = ch.get("source_video", video_path)
+        idx = src_index[src]
+
+        if isinstance(speech, dict):
+            src_speech = speech.get(src, [])
+        elif isinstance(speech, list):
+            src_speech = speech
+        else:
+            src_speech = []
+
+        s = snap_to_silence(ch["start"], src_speech, video_duration) if src_speech else ch["start"]
+        e = snap_to_silence(ch["end"], src_speech, video_duration) if src_speech else ch["end"]
+
+        parts.append(f"[{idx}:v]trim=start={s}:end={e},setpts=PTS-STARTPTS[v{i}];")
+        parts.append(f"[{idx}:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}];")
         inputs.append(f"[v{i}][a{i}]")
-    filter_complex = "".join(parts) + f"{''.join(inputs)}concat=n={len(scenes)}:v=1:a=1[outv][outa]"
-    cmd = ["ffmpeg", "-y", "-i", video_path,
-           "-filter_complex", filter_complex,
-           "-map", "[outv]", "-map", "[outa]",
-           "-c:v", "libx264", "-c:a", "aac", output_path]
+
+    filter_complex = "".join(parts) + f"{''.join(inputs)}concat=n={len(selected_chunks)}:v=1:a=1[outv][outa]"
+    input_args = []
+    for src in seen:
+        input_args += ["-i", src]
+
+    cmd = ["ffmpeg", "-y"] + input_args + [
+        "-filter_complex", filter_complex,
+        "-map", "[outv]", "-map", "[outa]",
+        "-c:v", "libx264", "-c:a", "aac", output_path,
+    ]
     subprocess.run(cmd, check=True, capture_output=True)
-    kept = sum(e - s for s, e in scenes)
-    log.info(f"wrote {output_path} ({kept:.1f}s from {len(scenes)} chunks)")
+    kept = sum(ch["end"] - ch["start"] for ch in selected_chunks)
+    log.info(f"wrote {output_path} ({kept:.1f}s from {len(selected_chunks)} chunks)")
 
 
 def merge_chunks_json(chunk_files: list[str]) -> dict:
@@ -418,11 +442,20 @@ def main() -> int:
         speech = data.get("speech", [])
         duration = data.get("duration", 0.0)
         selected = [int(x.strip()) for x in args.selected.split(",")]
+
+        max_idx = len(chunks) - 1
+        invalid = [i for i in selected if i < 0 or i > max_idx]
+        if invalid:
+            log.error(f"invalid chunk indices {invalid} — valid range is 0-{max_idx}")
+            return 1
+
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
         use_speech = speech if (args.speech_aware and speech) else None
         if args.speech_aware and not speech:
             log.info("no speech data in chunks.json — cutting without speech snapping")
-        concat_chunks(data["video"], chunks, selected, args.output,
+
+        video_path = data.get("video")
+        concat_chunks(video_path, chunks, selected, args.output,
                       speech=use_speech, video_duration=duration)
 
     elif args.mode == "merge":

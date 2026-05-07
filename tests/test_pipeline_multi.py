@@ -109,3 +109,33 @@ def test_merge_chunks_json_excludes_all_chunks(tmp_path):
     (tmp_path / "all_chunks.json").write_text('{"sources":[],"chunks":[],"speech":{}}')
     result = merge_chunks_json([f1])
     assert len(result["chunks"]) == 1
+
+
+from pipeline import concat_chunks
+from unittest.mock import patch, MagicMock
+
+def test_concat_chunks_multi_source_builds_correct_inputs(tmp_path):
+    chunks = [
+        {"start": 0.0, "end": 10.0, "source_video": "/v1.MOV"},
+        {"start": 5.0, "end": 15.0, "source_video": "/v2.MOV"},
+        {"start": 20.0, "end": 30.0, "source_video": "/v1.MOV"},
+    ]
+    captured = {}
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        m = MagicMock()
+        m.returncode = 0
+        return m
+
+    with patch("subprocess.run", side_effect=fake_run):
+        concat_chunks(
+            video_path=None,
+            chunks=chunks,
+            selected=[0, 1, 2],
+            output_path=str(tmp_path / "out.mp4"),
+        )
+
+    cmd = captured["cmd"]
+    assert cmd.count("-i") == 2
+    assert "/v1.MOV" in cmd
+    assert "/v2.MOV" in cmd
