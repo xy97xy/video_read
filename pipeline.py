@@ -249,6 +249,7 @@ def concat_chunks(
         src_index = {video_path: 0}
 
     parts, inputs = [], []
+    actual_duration = 0.0
     for i, ch in enumerate(selected_chunks):
         src = ch.get("source_video", video_path)
         idx = src_index[src]
@@ -263,6 +264,7 @@ def concat_chunks(
         dur = video_duration.get(src, 0.0) if isinstance(video_duration, dict) else video_duration
         s = snap_to_silence(ch["start"], src_speech, dur) if src_speech else ch["start"]
         e = snap_to_silence(ch["end"], src_speech, dur) if src_speech else ch["end"]
+        actual_duration += e - s
 
         parts.append(f"[{idx}:v]trim=start={s}:end={e},setpts=PTS-STARTPTS[v{i}];")
         parts.append(f"[{idx}:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}];")
@@ -279,8 +281,7 @@ def concat_chunks(
         "-c:v", "libx264", "-c:a", "aac", output_path,
     ]
     subprocess.run(cmd, check=True, capture_output=True)
-    kept = sum(ch["end"] - ch["start"] for ch in selected_chunks)
-    log.info(f"wrote {output_path} ({kept:.1f}s from {len(selected_chunks)} chunks)")
+    log.info(f"wrote {output_path} ({actual_duration:.1f}s from {len(selected_chunks)} chunks)")
 
 
 def merge_chunks_json(chunk_files: list[str]) -> dict:

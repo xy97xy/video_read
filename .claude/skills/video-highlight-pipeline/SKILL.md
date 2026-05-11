@@ -9,14 +9,37 @@ description: Use when creating highlight reels from travel or action videos usin
 
 Local pipeline: describe video chunks with AI + transcribe speech, then cut selected chunks into a highlight reel with speech-aware boundaries. Supports single videos and multi-video batch processing.
 
+## Prerequisites: venv setup
+
+Before running anything, check that the venv exists:
+
+```bash
+ls venv/bin/activate
+```
+
+If missing, set it up first:
+
+```bash
+bash setup_venv.sh
+```
+
+This installs all dependencies (Qwen, TransNetV2, faster-whisper, ffmpeg bindings). Takes ~5 minutes on first run.
+
+---
+
 ## Step 0: Gather inputs before running anything
 
 Ask the user:
 1. **Single or multiple videos?**
-   - Single video → ask for video path, output dir, highlight goal → follow **Single-Video Flow** below
-   - Multiple videos / directory → ask for video directory (or list of files), output dir, highlight goal → follow **Multi-Video Flow** below
+   - Single video → ask for video path, output dir → follow **Single-Video Flow** below
+   - Multiple videos / directory → ask for video directory (or list of files), output dir → follow **Multi-Video Flow** below
+2. **Theme** — what is this highlight reel about? Ask explicitly. Examples:
+   - "Best moments and variety of scenes"
+   - "Energetic action moments only, under 90 seconds"
+   - "Scenic and cultural moments, no talking-head clips"
+   - "Food and nightlife"
 
-Do not proceed until you have all inputs.
+Write the theme down. Every selection decision in Step 2/3 must reference it — explain per chunk why it fits or doesn't fit the theme. Do not proceed until you have all inputs.
 
 ---
 
@@ -53,7 +76,7 @@ The output already includes speech tags — show them prominently:
 
 ### Step 2: Select
 
-Based on the user's highlight goal and the chunk descriptions, select the best chunks. Explain your choices briefly. Ask the user to confirm or adjust before cutting.
+State the theme at the top, then go through the chunks and select based on it. For each selected chunk explain in one line why it fits the theme. For rejected chunks, only explain if the reason is non-obvious. Ask the user to confirm or adjust before cutting.
 
 ### Step 3: Cut
 
@@ -122,7 +145,7 @@ Read `<output_dir>/all_chunks.json` and show the user the combined summary table
 
 ### Step 3: Select
 
-Based on the highlight goal and chunk descriptions, select chunks. Group your explanation by source video. Ask the user to confirm before cutting.
+State the theme at the top. Group your selection by source video. For each selected chunk explain in one line why it fits the theme. Ask the user to confirm before cutting.
 
 ### Step 4: Cut
 
