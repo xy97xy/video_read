@@ -228,7 +228,7 @@ def concat_chunks(
     selected: list[int],
     output_path: str,
     speech: list[dict] | dict | None = None,
-    video_duration: float = 0.0,
+    video_duration: float | dict = 0.0,
 ) -> None:
     selected_chunks = [chunks[i] for i in selected]
     if not selected_chunks:
@@ -260,8 +260,9 @@ def concat_chunks(
         else:
             src_speech = []
 
-        s = snap_to_silence(ch["start"], src_speech, video_duration) if src_speech else ch["start"]
-        e = snap_to_silence(ch["end"], src_speech, video_duration) if src_speech else ch["end"]
+        dur = video_duration.get(src, 0.0) if isinstance(video_duration, dict) else video_duration
+        s = snap_to_silence(ch["start"], src_speech, dur) if src_speech else ch["start"]
+        e = snap_to_silence(ch["end"], src_speech, dur) if src_speech else ch["end"]
 
         parts.append(f"[{idx}:v]trim=start={s}:end={e},setpts=PTS-STARTPTS[v{i}];")
         parts.append(f"[{idx}:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}];")
@@ -442,7 +443,10 @@ def main() -> int:
             data = json.load(f)
         chunks = data["chunks"]
         speech = data.get("speech", [])
-        duration = data.get("duration", 0.0)
+        if "sources" in data:
+            duration = {s["video"]: s["duration"] for s in data["sources"]}
+        else:
+            duration = data.get("duration", 0.0)
         selected = [int(x.strip()) for x in args.selected.split(",")]
 
         max_idx = len(chunks) - 1
