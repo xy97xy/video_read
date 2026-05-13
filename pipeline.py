@@ -11,6 +11,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -97,17 +98,40 @@ def load_qwen():
     return model, processor
 
 
-def describe_chunk(model, processor, seg_path: str, start: float, end: float) -> str:
+_QWEN_PROMPT = (
+    'Analyze this video clip and respond with ONLY a JSON object — no other text, no markdown:\n'
+    '{\n'
+    '  "action": "who is present and what they are doing (include motion, interactions, setting)",\n'
+    '  "peak": "the single most visually striking or interesting moment in this clip",\n'
+    '  "shot": "camera and composition type (e.g. wide shot, close-up, tracking shot, aerial, static)"\n'
+    '}'
+)
+
+
+def _parse_qwen_json(raw: str) -> dict:
+    """Try to extract a JSON object from Qwen output; fall back gracefully."""
+    match = re.search(r'\{[^{}]*\}', raw, re.DOTALL)
+    if match:
+        try:
+            parsed = json.loads(match.group())
+            if "action" in parsed:
+                return {
+                    "action": str(parsed.get("action", "")).strip(),
+                    "peak": str(parsed.get("peak", "")).strip() or None,
+                    "shot": str(parsed.get("shot", "")).strip() or None,
+                }
+        except json.JSONDecodeError:
+            pass
+    log.warning("qwen JSON parse failed — storing raw text in action field")
+    return {"action": raw.strip(), "peak": None, "shot": None}
+
+
+def describe_chunk(model, processor, seg_path: str, start: float, end: float) -> dict:
     messages = [{
         "role": "user",
         "content": [
             {"type": "video", "video": seg_path, "fps": 1.0, "max_pixels": 360 * 420},
-            {"type": "text", "text": (
-                f"Describe what happens in this video clip in detail. "
-                f"Cover: subjects, actions, camera movement, notable details, background. "
-                f"Be specific — mention objects, colors, and movements you observe. "
-                f"This clip covers {start:.1f}s-{end:.1f}s of the original video."
-            )},
+            {"type": "text", "text": _QWEN_PROMPT},
         ],
     }]
     text_input = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -119,12 +143,15 @@ def describe_chunk(model, processor, seg_path: str, start: float, end: float) ->
         return_tensors="pt", **video_kwargs,
     ).to(model.device)
     with torch.no_grad():
-        outputs = model.generate(**inputs, max_new_tokens=512, do_sample=False)
+        outputs = model.generate(**inputs, max_new_tokens=300, do_sample=False)
     decoded = processor.decode(outputs[0], skip_special_tokens=True)
     for marker in ("assistant\n", "Assistant: ", "assistant: "):
         if marker in decoded:
-            return decoded.split(marker, 1)[1].strip()
-    return decoded.strip()
+            decoded = decoded.split(marker, 1)[1].strip()
+            break
+    else:
+        decoded = decoded.strip()
+    return _parse_qwen_json(decoded)
 
 
 def cut_segment(video_path: str, start: float, end: float, out_path: str) -> None:
@@ -150,8 +177,14 @@ def describe_all(model, processor, video_path: str, chunks: list[dict], thumbs_d
             extract_thumb(seg_path, thumb_path, (chunk["end"] - chunk["start"]) / 2)
             chunk["thumb"] = thumb_path
         log.info(f"[{i+1}/{len(chunks)}] describing {chunk['start']:.1f}s-{chunk['end']:.1f}s ...")
-        chunk["description"] = describe_chunk(model, processor, seg_path, chunk["start"], chunk["end"])
-        log.info(f"  {chunk['description'][:100]}")
+        result = describe_chunk(model, processor, seg_path, chunk["start"], chunk["end"])
+        chunk["action"] = result["action"]
+        chunk["peak"] = result["peak"]
+        chunk["shot"] = result["shot"]
+        chunk["description"] = result["action"]  # backward compat
+        log.info(f"  action: {result['action'][:80]}")
+        if result["peak"]:
+            log.info(f"  peak:   {result['peak'][:80]}")
         os.remove(seg_path)
     try:
         os.rmdir(seg_dir)
@@ -253,7 +286,15 @@ def write_thumbs_html(
         src_speech = speech_data.get(src, []) if isinstance(speech_data, dict) else speech_data
         spoken = speech_in_range(src_speech, ch["start"], ch["end"])
         speech_html = f'<div class="speech">"{" / ".join(spoken)[:70]}"</div>' if spoken else ""
-        desc = (ch.get("description") or "")[:100]
+
+        if ch.get("action"):
+            action_text = ch["action"][:100]
+            peak_html = f'<div class="peak">peak: {ch["peak"][:80]}</div>' if ch.get("peak") else ""
+            shot_html = f'<div class="shot">{ch["shot"]}</div>' if ch.get("shot") else ""
+            desc_html = f'<div class="desc">{action_text}…</div>{peak_html}{shot_html}'
+        else:
+            desc = (ch.get("description") or "")[:100]
+            desc_html = f'<div class="desc">{desc}…</div>'
 
         cards.append(f'''<div class="chunk">
   {img_html}
@@ -261,7 +302,7 @@ def write_thumbs_html(
     <span class="index">[{idx}]</span>
     <span class="time">{ch["start"]:.1f}s – {ch["end"]:.1f}s</span>
     {speech_html}
-    <div class="desc">{desc}…</div>
+    {desc_html}
   </div>
 </div>''')
 
@@ -286,6 +327,8 @@ def write_thumbs_html(
   .time {{ color: #888; font-size: 11px; }}
   .speech {{ color: #fa4; font-size: 11px; margin: 4px 0; }}
   .desc {{ font-size: 11px; color: #aaa; line-height: 1.4; margin-top: 4px; }}
+  .peak {{ font-size: 10px; color: #8d8; margin-top: 3px; }}
+  .shot {{ font-size: 10px; color: #88f; margin-top: 2px; font-style: italic; }}
 </style>
 </head>
 <body>
@@ -558,7 +601,14 @@ def main() -> int:
             spoken = speech_in_range(speech, ch["start"], ch["end"])
             speech_tag = f" [speech: {' / '.join(spoken)[:60]}]" if spoken else ""
             print(f"[{i}] {ch['start']:.1f}s-{ch['end']:.1f}s:{speech_tag}")
-            print(f"     {ch['description'][:120]}...")
+            if ch.get("action"):
+                print(f"     action: {ch['action'][:100]}")
+                if ch.get("peak"):
+                    print(f"     peak:   {ch['peak'][:100]}")
+                if ch.get("shot"):
+                    print(f"     shot:   {ch['shot']}")
+            else:
+                print(f"     {ch.get('description', '')[:120]}...")
         print("\nRun: python pipeline.py cut --chunks-json <file> --selected 0,1,2 --output highlight.mp4")
 
     elif args.mode == "cut":
@@ -629,7 +679,14 @@ def main() -> int:
             spoken = speech_in_range(src_speech, ch["start"], ch["end"])
             speech_tag = f" [speech: {' / '.join(spoken)[:60]}]" if spoken else ""
             print(f"[{ch['index']}] {ch['start']:.1f}s-{ch['end']:.1f}s:{speech_tag}")
-            print(f"     {ch['description'][:100]}...")
+            if ch.get("action"):
+                print(f"     action: {ch['action'][:100]}")
+                if ch.get("peak"):
+                    print(f"     peak:   {ch['peak'][:100]}")
+                if ch.get("shot"):
+                    print(f"     shot:   {ch['shot']}")
+            else:
+                print(f"     {ch.get('description', '')[:100]}...")
         print(f"\nRun: python pipeline.py cut --chunks-json {args.output} --selected 0,1,2 --output highlight.mp4")
 
     elif args.mode == "batch":

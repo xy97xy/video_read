@@ -66,12 +66,14 @@ python pipeline.py describe \
 - `--no-transcribe` — skip audio transcription
 - `--whisper-model base` — whisper model size (tiny/base/small/medium/large)
 
-After it finishes, tell the user to open `<output_dir>/thumbs.html` in a browser — it shows every chunk as a thumbnail grid with index, time, speech, and description. Then read `<output_dir>/chunks.json` and show the summary table as well:
+After it finishes, tell the user to open `<output_dir>/thumbs.html` in a browser — it shows every chunk as a thumbnail grid with index, time, speech, action, peak, and shot type. Then read `<output_dir>/chunks.json` and show the summary table:
 
-| # | Time | Speech | Description |
-|---|------|--------|-------------|
-| 0 | 0s-10s | "You see the first clip..." | ... |
-| 1 | 10s-20s | (none) | ... |
+| # | Time | Speech | Action | Peak | Shot |
+|---|------|--------|--------|------|------|
+| 0 | 0s-10s | "..." | what is happening | most striking moment | wide shot |
+| 1 | 10s-20s | (none) | ... | ... | close-up |
+
+Qwen outputs structured JSON (`action`/`peak`/`shot`) for each chunk. If a chunk was described before this feature existed, it will only have a `description` field — display that in the Action column and leave Peak/Shot empty.
 
 ### Step 2: Select
 
@@ -140,7 +142,11 @@ python pipeline.py merge \
   --output <output_dir>/all_chunks.json
 ```
 
-Tell the user to open `<output_dir>/thumbs.html` in a browser — it shows all chunks across all videos as a thumbnail grid with global indices, grouped by source. Then show the combined summary table as well.
+Tell the user to open `<output_dir>/thumbs.html` in a browser — it shows all chunks across all videos as a thumbnail grid with global indices, grouped by source. Then show the combined summary table (grouped by source video):
+
+| # | Time | Speech | Action | Peak | Shot |
+|---|------|--------|--------|------|------|
+| 0 | ... | ... | ... | ... | ... |
 
 ### Step 3: Select
 
