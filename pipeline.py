@@ -133,9 +133,8 @@ def cut_segment(video_path: str, start: float, end: float, out_path: str) -> Non
     subprocess.run(cmd, check=True, capture_output=True)
 
 
-def extract_thumb(seg_path: str, out_path: str, seg_duration: float) -> None:
-    mid = seg_duration / 2
-    cmd = ["ffmpeg", "-y", "-ss", str(mid), "-i", seg_path,
+def extract_thumb(video_path: str, out_path: str, seek_time: float) -> None:
+    cmd = ["ffmpeg", "-y", "-ss", str(seek_time), "-i", video_path,
            "-frames:v", "1", "-q:v", "3", out_path]
     subprocess.run(cmd, check=True, capture_output=True)
 
@@ -147,7 +146,7 @@ def describe_all(model, processor, video_path: str, chunks: list[dict], thumbs_d
         cut_segment(video_path, chunk["start"], chunk["end"], seg_path)
         if thumbs_dir:
             thumb_path = os.path.join(thumbs_dir, f"chunk_{i}.jpg")
-            extract_thumb(seg_path, thumb_path, chunk["end"] - chunk["start"])
+            extract_thumb(seg_path, thumb_path, (chunk["end"] - chunk["start"]) / 2)
             chunk["thumb"] = thumb_path
         log.info(f"[{i+1}/{len(chunks)}] describing {chunk['start']:.1f}s-{chunk['end']:.1f}s ...")
         chunk["description"] = describe_chunk(model, processor, seg_path, chunk["start"], chunk["end"])
@@ -164,7 +163,7 @@ def describe_all(model, processor, video_path: str, chunks: list[dict], thumbs_d
 # Stage 2b: speech transcription (optional, faster-whisper)
 # ---------------------------------------------------------------------------
 
-def transcribe_audio(video_path: str, model_size: str = "base") -> list[dict]:
+def transcribe_audio(video_path: str, model_size: str = "base", language: str | None = None) -> list[dict]:
     """Return list of {start, end, text, words} speech segments."""
     try:
         from faster_whisper import WhisperModel
@@ -188,7 +187,7 @@ def transcribe_audio(video_path: str, model_size: str = "base") -> list[dict]:
         log.error("could not load whisper model — skipping transcription")
         return []
 
-    segments_iter, info = whisper_model.transcribe(video_path, word_timestamps=True)
+    segments_iter, info = whisper_model.transcribe(video_path, word_timestamps=True, language=language)
     log.info(f"detected language: {info.language} (prob={info.language_probability:.2f})")
 
     speech = []
@@ -316,6 +315,8 @@ def concat_chunks(
     output_path: str,
     speech: list[dict] | dict | None = None,
     video_duration: float | dict = 0.0,
+    normalize_audio: bool = True,
+    scale_height: int | None = None,
 ) -> None:
     selected_chunks = [chunks[i] for i in selected]
     if not selected_chunks:
@@ -353,8 +354,14 @@ def concat_chunks(
         e = snap_to_silence(ch["end"], src_speech, dur) if src_speech else ch["end"]
         actual_duration += e - s
 
-        parts.append(f"[{idx}:v]trim=start={s}:end={e},setpts=PTS-STARTPTS[v{i}];")
-        parts.append(f"[{idx}:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}];")
+        vf = f"trim=start={s}:end={e},setpts=PTS-STARTPTS"
+        if scale_height:
+            vf += f",scale=-2:{scale_height}"
+        af = f"atrim=start={s}:end={e},asetpts=PTS-STARTPTS"
+        if normalize_audio:
+            af += ",loudnorm"
+        parts.append(f"[{idx}:v]{vf}[v{i}];")
+        parts.append(f"[{idx}:a]{af}[a{i}];")
         inputs.append(f"[v{i}][a{i}]")
 
     filter_complex = "".join(parts) + f"{''.join(inputs)}concat=n={len(selected_chunks)}:v=1:a=1[outv][outa]"
@@ -458,6 +465,7 @@ def main() -> int:
     d.add_argument("--no-transcribe", dest="transcribe", action="store_false",
                    help="Skip audio transcription")
     d.add_argument("--whisper-model", default="base", help="Whisper model size (default: base)")
+    d.add_argument("--language", default=None, help="Audio language hint for Whisper, e.g. en, ja, ko")
 
     # cut mode
     c = sub.add_parser("cut", help="cut + concat selected chunks → highlight video")
@@ -467,6 +475,11 @@ def main() -> int:
     c.add_argument("--speech-aware", action="store_true", default=True,
                    help="Snap cut points to sentence boundaries (default: on)")
     c.add_argument("--no-speech-aware", dest="speech_aware", action="store_false")
+    c.add_argument("--normalize-audio", action="store_true", default=True,
+                   help="Normalize audio loudness across clips (default: on)")
+    c.add_argument("--no-normalize-audio", dest="normalize_audio", action="store_false")
+    c.add_argument("--scale", type=int, default=None, metavar="HEIGHT",
+                   help="Scale output to this height in pixels, e.g. 1080 or 720 (default: source resolution)")
 
     # merge mode
     m = sub.add_parser("merge", help="combine per-video chunks.json → all_chunks.json")
@@ -483,6 +496,12 @@ def main() -> int:
     b.add_argument("--transcribe", action="store_true", default=True)
     b.add_argument("--no-transcribe", dest="transcribe", action="store_false")
     b.add_argument("--whisper-model", default="base")
+    b.add_argument("--language", default=None, help="Audio language hint for Whisper, e.g. en, ja, ko")
+
+    # thumbs mode
+    t = sub.add_parser("thumbs", help="retroactively generate thumbnails + thumbs.html from chunks.json")
+    t.add_argument("--chunks-json", required=True, help="Path to chunks.json or all_chunks.json")
+    t.add_argument("--output-dir", default=None, help="Where to write thumbs/ and thumbs.html (default: same dir as chunks-json)")
 
     args = p.parse_args()
 
@@ -500,7 +519,7 @@ def main() -> int:
 
         speech = []
         if args.transcribe:
-            speech = transcribe_audio(args.video, model_size=args.whisper_model)
+            speech = transcribe_audio(args.video, model_size=args.whisper_model, language=args.language)
 
         # tag each chunk with its source video
         video_abs = str(Path(args.video).resolve())
@@ -556,7 +575,8 @@ def main() -> int:
 
         video_path = data.get("video")
         concat_chunks(video_path, chunks, selected, args.output,
-                      speech=use_speech, video_duration=duration)
+                      speech=use_speech, video_duration=duration,
+                      normalize_audio=args.normalize_audio, scale_height=args.scale)
 
     elif args.mode == "merge":
         chunk_files = sorted(
@@ -645,7 +665,7 @@ def main() -> int:
 
             speech = []
             if args.transcribe:
-                speech = transcribe_audio(video_path, model_size=args.whisper_model)
+                speech = transcribe_audio(video_path, model_size=args.whisper_model, language=args.language)
 
             video_abs = video_path  # already resolved by collect_videos()
             for chunk in chunks:
@@ -667,6 +687,42 @@ def main() -> int:
 
         log.info("batch complete")
         print(f"\nRun: python pipeline.py merge --output-dir {args.output_dir} --output {args.output_dir}/all_chunks.json")
+
+    elif args.mode == "thumbs":
+        with open(args.chunks_json) as f:
+            data = json.load(f)
+        out_dir = Path(args.output_dir) if args.output_dir else Path(args.chunks_json).parent
+        thumbs_dir = out_dir / "thumbs"
+        thumbs_dir.mkdir(parents=True, exist_ok=True)
+
+        chunks = data["chunks"]
+        log.info(f"extracting thumbnails for {len(chunks)} chunk(s)...")
+        for i, ch in enumerate(chunks):
+            src = ch.get("source_video") or data.get("video")
+            if not src:
+                log.warning(f"chunk {i}: no source video, skipping")
+                continue
+            idx = ch.get("index", i)
+            thumb_path = str(thumbs_dir / f"chunk_{idx}.jpg")
+            seek = (ch["start"] + ch["end"]) / 2
+            try:
+                extract_thumb(src, thumb_path, seek)
+                ch["thumb"] = thumb_path
+            except subprocess.CalledProcessError:
+                log.warning(f"chunk {i}: thumb extraction failed")
+            if (i + 1) % 10 == 0 or (i + 1) == len(chunks):
+                log.info(f"  {i+1}/{len(chunks)} done")
+
+        with open(args.chunks_json, "w") as f:
+            json.dump(data, f, indent=2)
+        log.info(f"updated {args.chunks_json}")
+
+        speech = data.get("speech", [])
+        is_merged = "sources" in data
+        title = "All Chunks" if is_merged else Path(data.get("video", "")).name
+        html_path = str(out_dir / "thumbs.html")
+        write_thumbs_html(chunks, speech, html_path, title=title)
+        log.info(f"wrote {html_path}")
 
     return 0
 
