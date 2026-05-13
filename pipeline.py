@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -638,7 +639,12 @@ def main() -> int:
             return 1
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
+        # Pre-fetch durations for ETA (fast ffprobe, before Qwen loads)
+        dur_cache = {e["video"]: get_duration(e["video"]) for e in entries}
+
         model, processor = load_qwen()
+        batch_start = time.time()
+        chunks_done = 0
 
         for i, entry in enumerate(entries):
             video_path = entry["video"]
@@ -663,7 +669,7 @@ def main() -> int:
                     shot_str = f" — {entry['shot_at']}"
             log.info(f"[{i+1}/{len(entries)}] {stem}{shot_str}")
 
-            duration = get_duration(video_path)
+            duration = dur_cache[video_path]
             scenes = detect_scenes(video_path, threshold=args.scene_threshold, duration=duration)
             chunks = split_long_scenes(scenes, max_chunk=args.max_chunk_seconds)
             log.info(f"  {len(scenes)} scenes → {len(chunks)} chunks")
@@ -671,6 +677,24 @@ def main() -> int:
             thumbs_dir = str(Path(args.output_dir) / f"{stem}_thumbs")
             Path(thumbs_dir).mkdir(parents=True, exist_ok=True)
             chunks = describe_all(model, processor, video_path, chunks, thumbs_dir=thumbs_dir)
+
+            chunks_done += len(chunks)
+            remaining = [
+                e for e in entries[i + 1:]
+                if not (Path(args.output_dir) / f"{Path(e['video']).stem}_chunks.json").exists()
+            ]
+            if remaining:
+                elapsed = time.time() - batch_start
+                avg = elapsed / max(chunks_done, 1)
+                est_remaining = sum(
+                    max(1, round(dur_cache[e["video"]] / args.max_chunk_seconds))
+                    for e in remaining
+                )
+                eta_s = avg * est_remaining
+                eta_str = (f"~{eta_s/3600:.1f}h" if eta_s >= 3600
+                           else f"~{int(eta_s/60)}m" if eta_s >= 60
+                           else f"~{int(eta_s)}s")
+                log.info(f"  {len(remaining)} video(s) left — {eta_str} remaining")
 
             speech = []
             if args.transcribe:
