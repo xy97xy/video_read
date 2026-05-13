@@ -133,11 +133,22 @@ def cut_segment(video_path: str, start: float, end: float, out_path: str) -> Non
     subprocess.run(cmd, check=True, capture_output=True)
 
 
-def describe_all(model, processor, video_path: str, chunks: list[dict]) -> list[dict]:
+def extract_thumb(seg_path: str, out_path: str, seg_duration: float) -> None:
+    mid = seg_duration / 2
+    cmd = ["ffmpeg", "-y", "-ss", str(mid), "-i", seg_path,
+           "-frames:v", "1", "-q:v", "3", out_path]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
+def describe_all(model, processor, video_path: str, chunks: list[dict], thumbs_dir: str | None = None) -> list[dict]:
     seg_dir = tempfile.mkdtemp(prefix="pipeline_seg_")
     for i, chunk in enumerate(chunks):
         seg_path = os.path.join(seg_dir, f"seg_{i}.mp4")
         cut_segment(video_path, chunk["start"], chunk["end"], seg_path)
+        if thumbs_dir:
+            thumb_path = os.path.join(thumbs_dir, f"chunk_{i}.jpg")
+            extract_thumb(seg_path, thumb_path, chunk["end"] - chunk["start"])
+            chunk["thumb"] = thumb_path
         log.info(f"[{i+1}/{len(chunks)}] describing {chunk['start']:.1f}s-{chunk['end']:.1f}s ...")
         chunk["description"] = describe_chunk(model, processor, seg_path, chunk["start"], chunk["end"])
         log.info(f"  {chunk['description'][:100]}")
@@ -201,6 +212,82 @@ def speech_in_range(speech: list[dict], start: float, end: float) -> list[str]:
         if seg["end"] > start and seg["start"] < end:
             texts.append(seg["text"])
     return texts
+
+
+def write_thumbs_html(
+    chunks: list[dict],
+    speech_data: list[dict] | dict,
+    html_path: str,
+    title: str = "Chunks",
+) -> None:
+    html_dir = Path(html_path).parent
+    unique_sources = list(dict.fromkeys(ch.get("source_video") for ch in chunks if ch.get("source_video")))
+    multi_source = len(unique_sources) > 1
+
+    cards: list[str] = []
+    current_src = None
+    for ch in chunks:
+        src = ch.get("source_video")
+        idx = ch.get("index", chunks.index(ch))
+
+        if multi_source and src != current_src:
+            current_src = src
+            cards.append(f'<div class="source-header">{Path(src).name if src else "unknown"}</div>')
+
+        thumb_abs = ch.get("thumb")
+        if thumb_abs and Path(thumb_abs).exists():
+            rel = os.path.relpath(thumb_abs, html_dir)
+            img_html = f'<img src="{rel}" alt="chunk {idx}">'
+        else:
+            img_html = '<div class="no-thumb">no thumbnail</div>'
+
+        src_speech = speech_data.get(src, []) if isinstance(speech_data, dict) else speech_data
+        spoken = speech_in_range(src_speech, ch["start"], ch["end"])
+        speech_html = f'<div class="speech">"{" / ".join(spoken)[:70]}"</div>' if spoken else ""
+        desc = (ch.get("description") or "")[:100]
+
+        cards.append(f'''<div class="chunk">
+  {img_html}
+  <div class="info">
+    <span class="index">[{idx}]</span>
+    <span class="time">{ch["start"]:.1f}s – {ch["end"]:.1f}s</span>
+    {speech_html}
+    <div class="desc">{desc}…</div>
+  </div>
+</div>''')
+
+    body = "\n".join(cards)
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>{title}</title>
+<style>
+  body {{ font-family: monospace; background: #111; color: #eee; margin: 0; padding: 16px; }}
+  h1 {{ color: #fff; font-size: 14px; margin: 0 0 16px; }}
+  .grid {{ display: flex; flex-wrap: wrap; gap: 10px; }}
+  .source-header {{ width: 100%; padding: 8px 0 4px; font-size: 13px; font-weight: bold;
+                    color: #4af; border-bottom: 1px solid #333; margin-top: 12px; }}
+  .chunk {{ width: 260px; background: #1e1e1e; border-radius: 6px; overflow: hidden; }}
+  .chunk img {{ width: 100%; display: block; }}
+  .no-thumb {{ width: 100%; height: 146px; background: #2a2a2a; display: flex;
+               align-items: center; justify-content: center; color: #555; font-size: 11px; }}
+  .info {{ padding: 8px; }}
+  .index {{ font-size: 18px; font-weight: bold; color: #4af; margin-right: 6px; }}
+  .time {{ color: #888; font-size: 11px; }}
+  .speech {{ color: #fa4; font-size: 11px; margin: 4px 0; }}
+  .desc {{ font-size: 11px; color: #aaa; line-height: 1.4; margin-top: 4px; }}
+</style>
+</head>
+<body>
+<h1>{title}</h1>
+<div class="grid">
+{body}
+</div>
+</body>
+</html>"""
+    with open(html_path, "w") as f:
+        f.write(html)
 
 
 # ---------------------------------------------------------------------------
@@ -407,7 +494,9 @@ def main() -> int:
         log.info(f"{len(scenes)} scenes → {len(chunks)} chunks (video: {duration:.1f}s)")
 
         model, processor = load_qwen()
-        chunks = describe_all(model, processor, args.video, chunks)
+        thumbs_dir = str(Path(args.output).parent / "thumbs")
+        Path(thumbs_dir).mkdir(parents=True, exist_ok=True)
+        chunks = describe_all(model, processor, args.video, chunks, thumbs_dir=thumbs_dir)
 
         speech = []
         if args.transcribe:
@@ -429,6 +518,10 @@ def main() -> int:
         with open(args.output, "w") as f:
             json.dump(out, f, indent=2)
         log.info(f"wrote {args.output}")
+
+        html_path = str(Path(args.output).parent / "thumbs.html")
+        write_thumbs_html(chunks, speech, html_path, title=Path(args.video).name)
+        log.info(f"wrote {html_path}")
 
         # Print summary for selection
         print("\n--- CHUNK SUMMARY ---")
@@ -479,6 +572,10 @@ def main() -> int:
         with open(args.output, "w") as f:
             json.dump(merged, f, indent=2)
         log.info(f"wrote {args.output}")
+
+        html_path = str(Path(args.output).parent / "thumbs.html")
+        write_thumbs_html(merged["chunks"], merged["speech"], html_path, title="All Chunks")
+        log.info(f"wrote {html_path}")
 
         # Print combined summary grouped by source
         print("\n--- COMBINED CHUNK SUMMARY ---")
@@ -542,7 +639,9 @@ def main() -> int:
             chunks = split_long_scenes(scenes, max_chunk=args.max_chunk_seconds)
             log.info(f"  {len(scenes)} scenes → {len(chunks)} chunks")
 
-            chunks = describe_all(model, processor, video_path, chunks)
+            thumbs_dir = str(Path(args.output_dir) / f"{stem}_thumbs")
+            Path(thumbs_dir).mkdir(parents=True, exist_ok=True)
+            chunks = describe_all(model, processor, video_path, chunks, thumbs_dir=thumbs_dir)
 
             speech = []
             if args.transcribe:
@@ -561,7 +660,10 @@ def main() -> int:
             }
             with open(out_path, "w") as f:
                 json.dump(out_data, f, indent=2)
-            log.info(f"  wrote {out_path} ({len(chunks)} chunks)")
+
+            html_path = str(Path(args.output_dir) / f"{stem}_thumbs.html")
+            write_thumbs_html(chunks, speech, html_path, title=stem)
+            log.info(f"  wrote {out_path} ({len(chunks)} chunks) + {Path(html_path).name}")
 
         log.info("batch complete")
         print(f"\nRun: python pipeline.py merge --output-dir {args.output_dir} --output {args.output_dir}/all_chunks.json")

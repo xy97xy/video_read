@@ -66,8 +66,7 @@ python pipeline.py describe \
 - `--no-transcribe` — skip audio transcription
 - `--whisper-model base` — whisper model size (tiny/base/small/medium/large)
 
-After it finishes, read `<output_dir>/chunks.json` and show the user a full summary table.
-The output already includes speech tags — show them prominently:
+After it finishes, tell the user to open `<output_dir>/thumbs.html` in a browser — it shows every chunk as a thumbnail grid with index, time, speech, and description. Then read `<output_dir>/chunks.json` and show the summary table as well:
 
 | # | Time | Speech | Description |
 |---|------|--------|-------------|
@@ -141,7 +140,7 @@ python pipeline.py merge \
   --output <output_dir>/all_chunks.json
 ```
 
-Read `<output_dir>/all_chunks.json` and show the user the combined summary table grouped by source video with real shot timestamps (e.g. "Nov 16, 8:19 PM").
+Tell the user to open `<output_dir>/thumbs.html` in a browser — it shows all chunks across all videos as a thumbnail grid with global indices, grouped by source. Then show the combined summary table as well.
 
 ### Step 3: Select
 
