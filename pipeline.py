@@ -99,29 +99,54 @@ def load_qwen():
 
 
 _QWEN_PROMPT = (
-    'Analyze this video clip and respond with ONLY a JSON object — no other text, no markdown:\n'
-    '{\n'
-    '  "action": "who is present and what they are doing (include motion, interactions, setting)",\n'
-    '  "peak": "the single most visually striking or interesting moment in this clip",\n'
-    '  "shot": "camera and composition type (e.g. wide shot, close-up, tracking shot, aerial, static)"\n'
-    '}'
+    'Analyze this video clip. Reply with ONLY this JSON — no markdown, no extra text, all values must be plain strings:\n'
+    '{"action": "one sentence: who is present and what they are doing",\n'
+    ' "peak": "one sentence: the single most visually striking moment",\n'
+    ' "shot": "shot type only, e.g. close-up, wide shot, tracking shot, aerial"}'
 )
+
+
+def _flatten(value) -> str | None:
+    """Convert any JSON value to a readable string."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, list):
+        return " ".join(str(v) for v in value).strip() or None
+    if isinstance(value, dict):
+        parts = []
+        for v in value.values():
+            if isinstance(v, (str, list)):
+                parts.append(_flatten(v))
+        return " ".join(p for p in parts if p) or str(value)
+    return str(value).strip() or None
 
 
 def _parse_qwen_json(raw: str) -> dict:
     """Try to extract a JSON object from Qwen output; fall back gracefully."""
-    match = re.search(r'\{[^{}]*\}', raw, re.DOTALL)
-    if match:
+    # Strip markdown code fences (```json ... ```)
+    text = re.sub(r"```(?:json)?\s*", "", raw).strip()
+
+    # Try the whole cleaned text first, then scan for first { ... last }
+    candidates = [text]
+    first_brace = text.find("{")
+    last_brace = text.rfind("}")
+    if first_brace != -1 and last_brace > first_brace:
+        candidates.append(text[first_brace:last_brace + 1])
+
+    for candidate in candidates:
         try:
-            parsed = json.loads(match.group())
-            if "action" in parsed:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict) and "action" in parsed:
                 return {
-                    "action": str(parsed.get("action", "")).strip(),
-                    "peak": str(parsed.get("peak", "")).strip() or None,
-                    "shot": str(parsed.get("shot", "")).strip() or None,
+                    "action": _flatten(parsed.get("action")) or raw.strip(),
+                    "peak": _flatten(parsed.get("peak")),
+                    "shot": _flatten(parsed.get("shot")),
                 }
         except json.JSONDecodeError:
             pass
+
     log.warning("qwen JSON parse failed — storing raw text in action field")
     return {"action": raw.strip(), "peak": None, "shot": None}
 
