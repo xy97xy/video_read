@@ -101,8 +101,10 @@ def load_qwen():
 _QWEN_PROMPT = (
     'Analyze this video clip. Reply with ONLY this JSON — no markdown, no extra text, all values must be plain strings:\n'
     '{"action": "one sentence: who is present and what they are doing",\n'
-    ' "peak": "one sentence: the single most visually striking moment",\n'
-    ' "shot": "shot type only, e.g. close-up, wide shot, tracking shot, aerial"}'
+    ' "shot": "shot type only, e.g. close-up, wide shot, tracking shot, aerial",\n'
+    ' "energy": "one word: low, medium, or high",\n'
+    ' "setting": "brief location context, e.g. beach at sunset, indoor market, hotel room",\n'
+    ' "quality": "good, or note any issues: blur, shaky, overexposed, obstructed"}'
 )
 
 
@@ -141,14 +143,16 @@ def _parse_qwen_json(raw: str) -> dict:
             if isinstance(parsed, dict) and "action" in parsed:
                 return {
                     "action": _flatten(parsed.get("action")) or raw.strip(),
-                    "peak": _flatten(parsed.get("peak")),
                     "shot": _flatten(parsed.get("shot")),
+                    "energy": _flatten(parsed.get("energy")),
+                    "setting": _flatten(parsed.get("setting")),
+                    "quality": _flatten(parsed.get("quality")),
                 }
         except json.JSONDecodeError:
             pass
 
     log.warning("qwen JSON parse failed — storing raw text in action field")
-    return {"action": raw.strip(), "peak": None, "shot": None}
+    return {"action": raw.strip(), "shot": None, "energy": None, "setting": None, "quality": None}
 
 
 def describe_chunk(model, processor, seg_path: str, start: float, end: float) -> dict:
@@ -204,12 +208,16 @@ def describe_all(model, processor, video_path: str, chunks: list[dict], thumbs_d
         log.info(f"[{i+1}/{len(chunks)}] describing {chunk['start']:.1f}s-{chunk['end']:.1f}s ...")
         result = describe_chunk(model, processor, seg_path, chunk["start"], chunk["end"])
         chunk["action"] = result["action"]
-        chunk["peak"] = result["peak"]
         chunk["shot"] = result["shot"]
+        chunk["energy"] = result["energy"]
+        chunk["setting"] = result["setting"]
+        chunk["quality"] = result["quality"]
         chunk["description"] = result["action"]  # backward compat
-        log.info(f"  action: {result['action'][:80]}")
-        if result["peak"]:
-            log.info(f"  peak:   {result['peak'][:80]}")
+        log.info(f"  action:  {result['action'][:80]}")
+        if result["setting"]:
+            log.info(f"  setting: {result['setting']}")
+        if result["energy"]:
+            log.info(f"  energy:  {result['energy']}  shot: {result['shot'] or '?'}  quality: {result['quality'] or '?'}")
         os.remove(seg_path)
     try:
         os.rmdir(seg_dir)
@@ -313,10 +321,16 @@ def write_thumbs_html(
         speech_html = f'<div class="speech">"{" / ".join(spoken)[:70]}"</div>' if spoken else ""
 
         if ch.get("action"):
-            action_text = ch["action"][:100]
-            peak_html = f'<div class="peak">peak: {ch["peak"][:80]}</div>' if ch.get("peak") else ""
-            shot_html = f'<div class="shot">{ch["shot"]}</div>' if ch.get("shot") else ""
-            desc_html = f'<div class="desc">{action_text}…</div>{peak_html}{shot_html}'
+            meta_parts = []
+            if ch.get("shot"):
+                meta_parts.append(ch["shot"])
+            if ch.get("energy"):
+                meta_parts.append(ch["energy"] + " energy")
+            if ch.get("quality") and ch["quality"].lower() != "good":
+                meta_parts.append(f'<span class="warn">{ch["quality"]}</span>')
+            meta_html = f'<div class="meta">{" · ".join(meta_parts)}</div>' if meta_parts else ""
+            setting_html = f'<div class="setting">{ch["setting"]}</div>' if ch.get("setting") else ""
+            desc_html = f'<div class="desc">{ch["action"][:120]}…</div>{setting_html}{meta_html}'
         else:
             desc = (ch.get("description") or "")[:100]
             desc_html = f'<div class="desc">{desc}…</div>'
@@ -352,8 +366,9 @@ def write_thumbs_html(
   .time {{ color: #888; font-size: 11px; }}
   .speech {{ color: #fa4; font-size: 11px; margin: 4px 0; }}
   .desc {{ font-size: 11px; color: #aaa; line-height: 1.4; margin-top: 4px; }}
-  .peak {{ font-size: 10px; color: #8d8; margin-top: 3px; }}
-  .shot {{ font-size: 10px; color: #88f; margin-top: 2px; font-style: italic; }}
+  .setting {{ font-size: 10px; color: #8d8; margin-top: 3px; }}
+  .meta {{ font-size: 10px; color: #88f; margin-top: 2px; font-style: italic; }}
+  .warn {{ color: #f84; font-style: normal; }}
 </style>
 </head>
 <body>
@@ -627,11 +642,13 @@ def main() -> int:
             speech_tag = f" [speech: {' / '.join(spoken)[:60]}]" if spoken else ""
             print(f"[{i}] {ch['start']:.1f}s-{ch['end']:.1f}s:{speech_tag}")
             if ch.get("action"):
-                print(f"     action: {ch['action'][:100]}")
-                if ch.get("peak"):
-                    print(f"     peak:   {ch['peak'][:100]}")
-                if ch.get("shot"):
-                    print(f"     shot:   {ch['shot']}")
+                print(f"     {ch['action'][:100]}")
+                tags = []
+                if ch.get("setting"): tags.append(ch["setting"])
+                if ch.get("shot"): tags.append(ch["shot"])
+                if ch.get("energy"): tags.append(ch["energy"] + " energy")
+                if ch.get("quality") and ch["quality"].lower() != "good": tags.append(f"[!] {ch['quality']}")
+                if tags: print(f"     {' · '.join(tags)}")
             else:
                 print(f"     {ch.get('description', '')[:120]}...")
         print("\nRun: python pipeline.py cut --chunks-json <file> --selected 0,1,2 --output highlight.mp4")
@@ -705,11 +722,13 @@ def main() -> int:
             speech_tag = f" [speech: {' / '.join(spoken)[:60]}]" if spoken else ""
             print(f"[{ch['index']}] {ch['start']:.1f}s-{ch['end']:.1f}s:{speech_tag}")
             if ch.get("action"):
-                print(f"     action: {ch['action'][:100]}")
-                if ch.get("peak"):
-                    print(f"     peak:   {ch['peak'][:100]}")
-                if ch.get("shot"):
-                    print(f"     shot:   {ch['shot']}")
+                print(f"     {ch['action'][:100]}")
+                tags = []
+                if ch.get("setting"): tags.append(ch["setting"])
+                if ch.get("shot"): tags.append(ch["shot"])
+                if ch.get("energy"): tags.append(ch["energy"] + " energy")
+                if ch.get("quality") and ch["quality"].lower() != "good": tags.append(f"[!] {ch['quality']}")
+                if tags: print(f"     {' · '.join(tags)}")
             else:
                 print(f"     {ch.get('description', '')[:100]}...")
         print(f"\nRun: python pipeline.py cut --chunks-json {args.output} --selected 0,1,2 --output highlight.mp4")

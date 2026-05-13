@@ -66,14 +66,14 @@ python pipeline.py describe \
 - `--no-transcribe` — skip audio transcription
 - `--whisper-model base` — whisper model size (tiny/base/small/medium/large)
 
-After it finishes, tell the user to open `<output_dir>/thumbs.html` in a browser — it shows every chunk as a thumbnail grid with index, time, speech, action, peak, and shot type. Then read `<output_dir>/chunks.json` and show the summary table:
+After it finishes, tell the user to open `<output_dir>/thumbs.html` in a browser — it shows every chunk as a thumbnail grid with index, time, speech, and structured metadata. Then read `<output_dir>/chunks.json` and show the summary table:
 
-| # | Time | Speech | Action | Peak | Shot |
-|---|------|--------|--------|------|------|
-| 0 | 0s-10s | "..." | what is happening | most striking moment | wide shot |
-| 1 | 10s-20s | (none) | ... | ... | close-up |
+| # | Time | Speech | Action | Setting | Shot | Energy | Quality |
+|---|------|--------|--------|---------|------|--------|---------|
+| 0 | 0s-10s | "..." | what is happening | beach at sunset | wide shot | high | good |
+| 1 | 10s-20s | (none) | ... | indoor market | close-up | low | shaky |
 
-Qwen outputs structured JSON (`action`/`peak`/`shot`) for each chunk. If a chunk was described before this feature existed, it will only have a `description` field — display that in the Action column and leave Peak/Shot empty.
+Qwen outputs structured JSON with five fields: `action`, `shot`, `energy`, `setting`, `quality`. Flag any chunk where quality is not "good" — those are candidates to skip. If a chunk was described before this feature existed, it will only have a `description` field — display that in the Action column and leave the rest empty.
 
 ### Step 2: Select
 
@@ -144,9 +144,9 @@ python pipeline.py merge \
 
 Tell the user to open `<output_dir>/thumbs.html` in a browser — it shows all chunks across all videos as a thumbnail grid with global indices, grouped by source. Then show the combined summary table (grouped by source video):
 
-| # | Time | Speech | Action | Peak | Shot |
-|---|------|--------|--------|------|------|
-| 0 | ... | ... | ... | ... | ... |
+| # | Time | Speech | Action | Setting | Shot | Energy | Quality |
+|---|------|--------|--------|---------|------|--------|---------|
+| 0 | ... | ... | ... | ... | ... | ... | ... |
 
 ### Step 3: Select
 
