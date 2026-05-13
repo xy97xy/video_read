@@ -204,11 +204,20 @@ def transcribe_audio(video_path: str, model_size: str = "base", language: str | 
     return speech
 
 
+def _is_garbage(text: str) -> bool:
+    if not text or len(text.strip('., …\t\n')) <= 1:
+        return True
+    if 'ʔ' in text:  # whisper noise token
+        return True
+    alpha = sum(c.isalpha() for c in text)
+    return alpha / len(text) < 0.4
+
+
 def speech_in_range(speech: list[dict], start: float, end: float) -> list[str]:
-    """Return text of speech segments that overlap with [start, end]."""
+    """Return text of speech segments that overlap with [start, end], filtering noise."""
     texts = []
     for seg in speech:
-        if seg["end"] > start and seg["start"] < end:
+        if seg["end"] > start and seg["start"] < end and not _is_garbage(seg["text"]):
             texts.append(seg["text"])
     return texts
 
