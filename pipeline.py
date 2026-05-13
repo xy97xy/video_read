@@ -28,7 +28,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("pipeline")
 
 QWEN_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
-MAX_CHUNK_SECONDS = 30
+MAX_CHUNK_SECONDS = 10
 SCENE_FPS = 25
 
 
