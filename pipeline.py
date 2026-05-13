@@ -203,8 +203,11 @@ def describe_all(model, processor, video_path: str, chunks: list[dict], thumbs_d
         cut_segment(video_path, chunk["start"], chunk["end"], seg_path)
         if thumbs_dir:
             thumb_path = os.path.join(thumbs_dir, f"chunk_{i}.jpg")
-            extract_thumb(seg_path, thumb_path, (chunk["end"] - chunk["start"]) / 2)
-            chunk["thumb"] = thumb_path
+            try:
+                extract_thumb(seg_path, thumb_path, (chunk["end"] - chunk["start"]) / 2)
+                chunk["thumb"] = thumb_path
+            except subprocess.CalledProcessError:
+                log.warning(f"  thumb extraction failed for chunk {i} (segment too short?)")
         log.info(f"[{i+1}/{len(chunks)}] describing {chunk['start']:.1f}s-{chunk['end']:.1f}s ...")
         result = describe_chunk(model, processor, seg_path, chunk["start"], chunk["end"])
         chunk["action"] = result["action"]
