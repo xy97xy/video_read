@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -198,34 +199,32 @@ def extract_thumb(video_path: str, out_path: str, seek_time: float) -> None:
 
 def describe_all(model, processor, video_path: str, chunks: list[dict], thumbs_dir: str | None = None) -> list[dict]:
     seg_dir = tempfile.mkdtemp(prefix="pipeline_seg_")
-    for i, chunk in enumerate(chunks):
-        seg_path = os.path.join(seg_dir, f"seg_{i}.mp4")
-        cut_segment(video_path, chunk["start"], chunk["end"], seg_path)
-        if thumbs_dir:
-            thumb_path = os.path.join(thumbs_dir, f"chunk_{i}.jpg")
-            try:
-                extract_thumb(seg_path, thumb_path, (chunk["end"] - chunk["start"]) / 2)
-                chunk["thumb"] = thumb_path
-            except subprocess.CalledProcessError:
-                log.warning(f"  thumb extraction failed for chunk {i} (segment too short?)")
-        log.info(f"[{i+1}/{len(chunks)}] describing {chunk['start']:.1f}s-{chunk['end']:.1f}s ...")
-        result = describe_chunk(model, processor, seg_path, chunk["start"], chunk["end"])
-        chunk["action"] = result["action"]
-        chunk["shot"] = result["shot"]
-        chunk["energy"] = result["energy"]
-        chunk["setting"] = result["setting"]
-        chunk["quality"] = result["quality"]
-        chunk["description"] = result["action"]  # backward compat
-        log.info(f"  action:  {result['action'][:80]}")
-        if result["setting"]:
-            log.info(f"  setting: {result['setting']}")
-        if result["energy"]:
-            log.info(f"  energy:  {result['energy']}  shot: {result['shot'] or '?'}  quality: {result['quality'] or '?'}")
-        os.remove(seg_path)
     try:
-        os.rmdir(seg_dir)
-    except OSError:
-        pass
+        for i, chunk in enumerate(chunks):
+            seg_path = os.path.join(seg_dir, f"seg_{i}.mp4")
+            cut_segment(video_path, chunk["start"], chunk["end"], seg_path)
+            if thumbs_dir:
+                thumb_path = os.path.join(thumbs_dir, f"chunk_{i}.jpg")
+                try:
+                    extract_thumb(seg_path, thumb_path, (chunk["end"] - chunk["start"]) / 2)
+                    chunk["thumb"] = thumb_path
+                except subprocess.CalledProcessError:
+                    log.warning(f"  thumb extraction failed for chunk {i} (segment too short?)")
+            log.info(f"[{i+1}/{len(chunks)}] describing {chunk['start']:.1f}s-{chunk['end']:.1f}s ...")
+            result = describe_chunk(model, processor, seg_path, chunk["start"], chunk["end"])
+            chunk["action"] = result["action"]
+            chunk["shot"] = result["shot"]
+            chunk["energy"] = result["energy"]
+            chunk["setting"] = result["setting"]
+            chunk["quality"] = result["quality"]
+            chunk["description"] = result["action"]  # backward compat
+            log.info(f"  action:  {result['action'][:80]}")
+            if result["setting"]:
+                log.info(f"  setting: {result['setting']}")
+            if result["energy"]:
+                log.info(f"  energy:  {result['energy']}  shot: {result['shot'] or '?'}  quality: {result['quality'] or '?'}")
+    finally:
+        shutil.rmtree(seg_dir, ignore_errors=True)
     return chunks
 
 
@@ -593,6 +592,8 @@ def main() -> int:
     b.add_argument("--no-transcribe", dest="transcribe", action="store_false")
     b.add_argument("--whisper-model", default="base")
     b.add_argument("--language", default=None, help="Audio language hint for Whisper, e.g. en, ja, ko")
+    b.add_argument("--force", nargs="*", metavar="VIDEO_STEM",
+                   help="Re-process even if output exists. No args = force all; pass stem(s) to force specific videos")
 
     # thumbs mode
     t = sub.add_parser("thumbs", help="retroactively generate thumbnails + thumbs.html from chunks.json")
@@ -755,7 +756,9 @@ def main() -> int:
             stem = Path(video_path).stem
             out_path = Path(args.output_dir) / f"{stem}_chunks.json"
 
-            if out_path.exists():
+            force_all = args.force is not None and len(args.force) == 0
+            force_this = args.force is not None and stem in args.force
+            if out_path.exists() and not force_all and not force_this:
                 try:
                     with open(out_path) as _f:
                         json.load(_f)
@@ -763,6 +766,8 @@ def main() -> int:
                     continue
                 except (json.JSONDecodeError, OSError):
                     log.warning(f"[{i+1}/{len(entries)}] {stem}_chunks.json is corrupt — re-processing")
+            elif out_path.exists() and (force_all or force_this):
+                log.info(f"[{i+1}/{len(entries)}] re-processing {stem} (--force)")
 
             shot_str = ""
             if entry.get("shot_at"):
