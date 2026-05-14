@@ -737,7 +737,9 @@ def main() -> int:
             selected = [int(x.strip()) for x in args.selected.split(",")]
         else:
             # --top N: score all chunks and pick the top-N by score
-            for ch in chunks:
+            for i, ch in enumerate(chunks):
+                if "index" not in ch:
+                    ch["index"] = i
                 if "score" not in ch:
                     ch["score"] = compute_chunk_score(ch)
             ranked = sorted(chunks, key=lambda c: c["score"], reverse=True)
