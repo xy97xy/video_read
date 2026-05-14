@@ -337,11 +337,19 @@ def write_thumbs_html(
             desc = (ch.get("description") or "")[:100]
             desc_html = f'<div class="desc">{desc}…</div>'
 
+        score = ch.get("score")
+        if score is not None:
+            score_color = "#4a4" if score >= 2.5 else "#a84" if score >= 1.5 else "#a44"
+            score_html = f'<span class="score" style="color:{score_color}">▲{score:.1f}</span>'
+        else:
+            score_html = ""
+
         cards.append(f'''<div class="chunk">
   {img_html}
   <div class="info">
     <span class="index">[{idx}]</span>
     <span class="time">{ch["start"]:.1f}s – {ch["end"]:.1f}s</span>
+    {score_html}
     {speech_html}
     {desc_html}
   </div>
@@ -366,6 +374,7 @@ def write_thumbs_html(
   .info {{ padding: 8px; }}
   .index {{ font-size: 18px; font-weight: bold; color: #4af; margin-right: 6px; }}
   .time {{ color: #888; font-size: 11px; }}
+  .score {{ font-size: 11px; font-weight: bold; margin-left: 6px; }}
   .speech {{ color: #fa4; font-size: 11px; margin: 4px 0; }}
   .desc {{ font-size: 11px; color: #aaa; line-height: 1.4; margin-top: 4px; }}
   .setting {{ font-size: 10px; color: #8d8; margin-top: 3px; }}
@@ -501,6 +510,53 @@ def merge_chunks_json(chunk_files: list[str]) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Chunk scoring
+# ---------------------------------------------------------------------------
+
+def extract_loudness(video_path: str, start: float, end: float) -> float | None:
+    """Return mean loudness in dBFS for the time range, or None on failure."""
+    duration = end - start
+    if duration <= 0:
+        return None
+    result = subprocess.run(
+        ["ffmpeg", "-ss", str(start), "-t", str(duration), "-i", video_path,
+         "-af", "volumedetect", "-f", "null", "-"],
+        capture_output=True, text=True,
+    )
+    m = re.search(r"mean_volume:\s*([-\d.]+)\s*dB", result.stderr)
+    return float(m.group(1)) if m else None
+
+
+def compute_chunk_score(chunk: dict, loudness_db: float | None = None) -> float:
+    """Score a chunk 0–5 from structured fields + optional audio loudness.
+
+    energy:   high=3 / medium=2 / low=1 / unknown=1.5
+    quality:  any non-good issue → -1.5
+    loudness: maps -60dB .. -10dB → 0 .. +1 bonus
+    """
+    score = 0.0
+
+    energy = (chunk.get("energy") or "").lower()
+    if "high" in energy:
+        score += 3.0
+    elif "medium" in energy:
+        score += 2.0
+    elif "low" in energy:
+        score += 1.0
+    else:
+        score += 1.5
+
+    quality = (chunk.get("quality") or "good").lower()
+    if quality != "good":
+        score -= 1.5
+
+    if loudness_db is not None:
+        score += max(0.0, min(1.0, (loudness_db + 60) / 50))
+
+    return round(max(0.0, score), 2)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -565,7 +621,10 @@ def main() -> int:
     # cut mode
     c = sub.add_parser("cut", help="cut + concat selected chunks → highlight video")
     c.add_argument("--chunks-json", required=True)
-    c.add_argument("--selected", required=True, help="Comma-separated chunk indices, e.g. 0,2,4")
+    sel_group = c.add_mutually_exclusive_group(required=True)
+    sel_group.add_argument("--selected", help="Comma-separated chunk indices, e.g. 0,2,4")
+    sel_group.add_argument("--top", type=int, metavar="N",
+                           help="Auto-select top-N scored chunks (requires prior 'score' run or inline scoring)")
     c.add_argument("--output", required=True, help="Output video path")
     c.add_argument("--speech-aware", action="store_true", default=True,
                    help="Snap cut points to sentence boundaries (default: on)")
@@ -599,6 +658,14 @@ def main() -> int:
     t = sub.add_parser("thumbs", help="retroactively generate thumbnails + thumbs.html from chunks.json")
     t.add_argument("--chunks-json", required=True, help="Path to chunks.json or all_chunks.json")
     t.add_argument("--output-dir", default=None, help="Where to write thumbs/ and thumbs.html (default: same dir as chunks-json)")
+
+    # score mode
+    sc = sub.add_parser("score", help="score chunks by energy/quality/loudness, print ranked list")
+    sc.add_argument("--chunks-json", required=True, help="Path to chunks.json or all_chunks.json")
+    sc.add_argument("--audio", action="store_true", default=False,
+                    help="Extract per-chunk audio loudness from source video (slower)")
+    sc.add_argument("--update", action="store_true", default=False,
+                    help="Write scores back into chunks.json in-place")
 
     args = p.parse_args()
 
@@ -666,7 +733,16 @@ def main() -> int:
             duration = {s["video"]: s["duration"] for s in data["sources"]}
         else:
             duration = data.get("duration", 0.0)
-        selected = [int(x.strip()) for x in args.selected.split(",")]
+        if args.selected:
+            selected = [int(x.strip()) for x in args.selected.split(",")]
+        else:
+            # --top N: score all chunks and pick the top-N by score
+            for ch in chunks:
+                if "score" not in ch:
+                    ch["score"] = compute_chunk_score(ch)
+            ranked = sorted(chunks, key=lambda c: c["score"], reverse=True)
+            selected = sorted(c["index"] for c in ranked[:args.top])
+            log.info(f"top-{args.top} by score: {selected}")
 
         max_idx = len(chunks) - 1
         invalid = [i for i in selected if i < 0 or i > max_idx]
@@ -865,6 +941,42 @@ def main() -> int:
         html_path = str(out_dir / "thumbs.html")
         write_thumbs_html(chunks, speech, html_path, title=title)
         log.info(f"wrote {html_path}")
+
+    elif args.mode == "score":
+        with open(args.chunks_json) as f:
+            data = json.load(f)
+        chunks = data["chunks"]
+        for i, ch in enumerate(chunks):
+            if "index" not in ch:
+                ch["index"] = i
+
+        for ch in chunks:
+            loudness = None
+            if args.audio:
+                src = ch.get("source_video") or data.get("video")
+                if src:
+                    loudness = extract_loudness(src, ch["start"], ch["end"])
+                    if loudness is not None:
+                        ch["loudness_db"] = round(loudness, 1)
+            ch["score"] = compute_chunk_score(ch, loudness_db=ch.get("loudness_db"))
+
+        if args.update:
+            with open(args.chunks_json, "w") as f:
+                json.dump(data, f, indent=2)
+            log.info(f"scores written to {args.chunks_json}")
+
+        ranked = sorted(chunks, key=lambda c: c["score"], reverse=True)
+        print(f"\n--- CHUNK SCORES (ranked) ---")
+        for ch in ranked:
+            idx = ch["index"]
+            score = ch["score"]
+            bar = "█" * int(score) + "░" * (5 - int(score))
+            energy = ch.get("energy", "?")
+            quality = ch.get("quality", "good")
+            quality_tag = f"  ⚠ {quality}" if quality.lower() != "good" else ""
+            loudness_tag = f"  {ch['loudness_db']:.0f}dBFS" if ch.get("loudness_db") is not None else ""
+            print(f"  [{idx:>3}] {score:.2f}/5  {bar}  {energy:6}  {ch['start']:.1f}s–{ch['end']:.1f}s{quality_tag}{loudness_tag}")
+        print(f"\nTop indices: {','.join(str(c['index']) for c in ranked)}")
 
     return 0
 
