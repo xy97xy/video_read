@@ -45,6 +45,37 @@ Write the theme down. Every selection decision in Step 2/3 must reference it —
 
 ## Single-Video Flow
 
+### Step 0: Get context + generate profile
+
+Ask the user:
+> "Give me one sentence describing this footage — e.g. 'skiing powder day at Chamonix' or 'Kilimanjaro summit attempt'."
+
+From their answer, write `<output_dir>/profile.json` with domain-calibrated weights and a selection prompt. Use the scoring weight table below as guidance:
+
+| Domain | energy_weights (high/medium/low) | quality_penalty | loudness_weight | shot_type_bonus |
+|---|---|---|---|---|
+| Mountaineering | 3.0 / 2.5 / 1.5 | −1.0 | 0.3 | aerial +1.0, wide shot +0.5 |
+| Skiing | 4.0 / 1.5 / 0.5 | −2.0 | 1.5 | aerial +1.0 |
+| Rock climbing | 3.0 / 2.5 / 1.0 | −1.5 | 0.3 | close-up +0.5 |
+| Travel / general | 3.0 / 2.0 / 1.0 | −1.5 | 1.0 | (none) |
+
+Write the profile JSON directly — no pipeline.py command needed. Example:
+
+```json
+{
+  "context": "skiing powder day at Chamonix",
+  "scoring": {
+    "energy_weights": {"high": 4.0, "medium": 1.5, "low": 0.5},
+    "quality_penalty": -2.0,
+    "loudness_weight": 1.5,
+    "shot_type_bonus": {"aerial": 1.0}
+  },
+  "selection_prompt": "You are selecting highlights for a skiing reel at Chamonix. Prefer: fast downhill runs, powder shots, aerial views, steep terrain. Avoid: gondola/lift rides, gear preparation, flat beginner slopes, consecutive similar runs on the same piste."
+}
+```
+
+If the context is ambiguous (e.g. "mountain trip"), ask one clarifying question: "Was this more technical climbing/mountaineering, or recreational hiking with great views?"
+
 ### Step 1: Describe
 
 ```bash
@@ -77,7 +108,7 @@ Qwen outputs structured JSON with five fields: `action`, `shot`, `energy`, `sett
 
 ### Step 2: Select
 
-State the theme at the top, then go through the chunks and select based on it. For each selected chunk explain in one line why it fits the theme. For rejected chunks, only explain if the reason is non-obvious. Ask the user to confirm or adjust before cutting.
+Load `<output_dir>/profile.json`. Use the profile's `selection_prompt` as your selection guide when reading through chunks. For each selected chunk explain in one line why it fits — reference the profile criteria explicitly (e.g. "aerial shot of steep couloir — matches profile preference for dramatic terrain"). Ask the user to confirm or adjust before cutting.
 
 ### Step 3: Cut
 
@@ -120,6 +151,37 @@ Speech-aware cutting is on by default: if a chunk boundary falls mid-sentence, t
 
 ## Multi-Video Flow
 
+### Step 0: Get context + generate profile
+
+Ask the user:
+> "Give me one sentence describing this footage — e.g. 'skiing powder day at Chamonix' or 'Kilimanjaro summit attempt'."
+
+From their answer, write `<output_dir>/profile.json` with domain-calibrated weights and a selection prompt. Use the scoring weight table below as guidance:
+
+| Domain | energy_weights (high/medium/low) | quality_penalty | loudness_weight | shot_type_bonus |
+|---|---|---|---|---|
+| Mountaineering | 3.0 / 2.5 / 1.5 | −1.0 | 0.3 | aerial +1.0, wide shot +0.5 |
+| Skiing | 4.0 / 1.5 / 0.5 | −2.0 | 1.5 | aerial +1.0 |
+| Rock climbing | 3.0 / 2.5 / 1.0 | −1.5 | 0.3 | close-up +0.5 |
+| Travel / general | 3.0 / 2.0 / 1.0 | −1.5 | 1.0 | (none) |
+
+Write the profile JSON directly — no pipeline.py command needed. Example:
+
+```json
+{
+  "context": "skiing powder day at Chamonix",
+  "scoring": {
+    "energy_weights": {"high": 4.0, "medium": 1.5, "low": 0.5},
+    "quality_penalty": -2.0,
+    "loudness_weight": 1.5,
+    "shot_type_bonus": {"aerial": 1.0}
+  },
+  "selection_prompt": "You are selecting highlights for a skiing reel at Chamonix. Prefer: fast downhill runs, powder shots, aerial views, steep terrain. Avoid: gondola/lift rides, gear preparation, flat beginner slopes, consecutive similar runs on the same piste."
+}
+```
+
+If the context is ambiguous (e.g. "mountain trip"), ask one clarifying question: "Was this more technical climbing/mountaineering, or recreational hiking with great views?"
+
 ### Step 1: Batch describe (unattended, resumable)
 
 ```bash
@@ -150,7 +212,7 @@ Tell the user to open `<output_dir>/thumbs.html` in a browser — it shows all c
 
 ### Step 3: Select
 
-State the theme at the top. Group your selection by source video. For each selected chunk explain in one line why it fits the theme. Ask the user to confirm before cutting.
+Load `<output_dir>/profile.json`. Use the profile's `selection_prompt` as your selection guide when reading through chunks. Group your selection by source video. For each selected chunk explain in one line why it fits — reference the profile criteria explicitly (e.g. "aerial shot of steep couloir — matches profile preference for dramatic terrain"). Ask the user to confirm or adjust before cutting.
 
 ### Step 4: Cut
 
