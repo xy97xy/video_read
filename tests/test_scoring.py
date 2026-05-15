@@ -68,7 +68,7 @@ def test_score_floored_at_zero():
     # 1.0 - 1.5 = -0.5 → clamped to 0
     assert compute_chunk_score(chunk) == 0.0
 
-import json, tempfile, os
+import json, os
 
 def test_score_command_with_profile(tmp_path):
     """pipeline.py score --profile should use profile weights."""
@@ -93,7 +93,7 @@ def test_score_command_with_profile(tmp_path):
          "--profile", str(profile_json),
          "--update"],
         capture_output=True, text=True,
-        cwd="/home/xiaoyu/git/video_read"
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     )
     assert result.returncode == 0, result.stderr
 

@@ -964,6 +964,8 @@ def main() -> int:
         if args.profile:
             with open(args.profile) as _pf:
                 profile = json.load(_pf)
+            if "scoring" not in profile:
+                p.error(f"--profile: JSON must contain a top-level 'scoring' key (got: {list(profile.keys())})")
 
         for ch in chunks:
             loudness = None
