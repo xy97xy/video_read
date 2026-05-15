@@ -216,4 +216,5 @@ smolvlm2_space/
 *.MOV
 *.mp4
 
-eval/
+eval/*
+!eval/*.py
