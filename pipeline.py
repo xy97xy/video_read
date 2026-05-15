@@ -555,7 +555,7 @@ def compute_chunk_score(chunk: dict, loudness_db: float | None = None, profile: 
 
     shot = (chunk.get("shot") or "").lower()
     for shot_key, bonus in shot_bonuses.items():
-        if shot_key.lower() in shot:
+        if shot_key.lower() in shot and isinstance(bonus, (int, float)):
             score += bonus
             break
 
