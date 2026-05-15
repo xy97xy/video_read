@@ -67,3 +67,38 @@ def test_score_floored_at_zero():
     chunk = {"energy": "low", "quality": "blurry, shaky"}
     # 1.0 - 1.5 = -0.5 → clamped to 0
     assert compute_chunk_score(chunk) == 0.0
+
+import json, tempfile, os
+
+def test_score_command_with_profile(tmp_path):
+    """pipeline.py score --profile should use profile weights."""
+    import subprocess, sys
+    chunks_json = tmp_path / "chunks.json"
+    profile_json = tmp_path / "profile.json"
+
+    chunks_json.write_text(json.dumps({"video": "x.mp4", "duration": 20.0, "chunks": [
+        {"start": 0.0, "end": 10.0, "energy": "high",   "quality": "good", "source_video": "x.mp4"},
+        {"start": 10.0, "end": 20.0, "energy": "low",   "quality": "good", "source_video": "x.mp4"},
+    ], "speech": []}))
+
+    # Skiing profile — steep energy curve
+    profile_json.write_text(json.dumps({"scoring": {
+        "energy_weights": {"high": 4.0, "medium": 1.5, "low": 0.5},
+        "quality_penalty": -2.0, "loudness_weight": 1.5, "shot_type_bonus": {}
+    }}))
+
+    result = subprocess.run(
+        [sys.executable, "pipeline.py", "score",
+         "--chunks-json", str(chunks_json),
+         "--profile", str(profile_json),
+         "--update"],
+        capture_output=True, text=True,
+        cwd="/home/xiaoyu/git/video_read"
+    )
+    assert result.returncode == 0, result.stderr
+
+    data = json.loads(chunks_json.read_text())
+    scores = {ch["index"]: ch["score"] for ch in data["chunks"]}
+    assert scores[0] == 4.0   # high energy with skiing profile
+    assert scores[1] == 0.5   # low energy with skiing profile
+    assert scores[0] - scores[1] == 3.5  # steeper than default (3.0 - 1.0 = 2.0)

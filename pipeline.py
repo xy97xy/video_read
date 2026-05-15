@@ -672,6 +672,8 @@ def main() -> int:
                     help="Extract per-chunk audio loudness from source video (slower)")
     sc.add_argument("--update", action="store_true", default=False,
                     help="Write scores back into chunks.json in-place")
+    sc.add_argument("--profile", default=None, metavar="PROFILE_JSON",
+                    help="Path to profile.json for domain-calibrated scoring weights")
 
     args = p.parse_args()
 
@@ -958,6 +960,11 @@ def main() -> int:
             if "index" not in ch:
                 ch["index"] = i
 
+        profile = None
+        if args.profile:
+            with open(args.profile) as _pf:
+                profile = json.load(_pf)
+
         for ch in chunks:
             loudness = None
             if args.audio:
@@ -966,7 +973,7 @@ def main() -> int:
                     loudness = extract_loudness(src, ch["start"], ch["end"])
                     if loudness is not None:
                         ch["loudness_db"] = round(loudness, 1)
-            ch["score"] = compute_chunk_score(ch, loudness_db=ch.get("loudness_db"))
+            ch["score"] = compute_chunk_score(ch, loudness_db=ch.get("loudness_db"), profile=profile)
 
         if args.update:
             with open(args.chunks_json, "w") as f:
