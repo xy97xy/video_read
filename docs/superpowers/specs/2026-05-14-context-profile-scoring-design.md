@@ -184,3 +184,60 @@ output_dir/
 2. Claude Code's selection reasoning explicitly references the profile's `selection_prompt` criteria (e.g. "selected because it shows summit moment per profile criteria")
 3. TVSum τ on the 5 test videos improves or stays the same (profile shouldn't hurt generic content)
 4. User can go from "here are my videos" to a cut highlight reel in one Claude Code conversation, providing only: video paths + one context sentence
+
+---
+
+## Benchmark Validation
+
+### TVSum (generic content — regression check)
+
+Infrastructure already in place. 5 videos described and scored in `/tmp/tvsum/`.
+Current baseline without profile: **τ = 0.124, ρ = 0.150**.
+
+After implementing `--profile`, re-run with a generic travel profile to confirm no regression:
+
+```bash
+# Generate a generic travel profile
+# (Claude Code writes profile.json with flat weights, no domain bias)
+
+python pipeline.py score \
+  --chunks-json /tmp/tvsum/chunks/<vid>.json \
+  --profile /tmp/tvsum/profile_generic.json \
+  --audio --update
+
+# Then re-run the tau computation script
+python3 eval/tvsum_eval.py   # (script to be written as part of implementation)
+```
+
+Target: τ ≥ 0.124 (no regression from adding profile support).
+
+### YouTube Highlights — skiing domain (positive test)
+
+Better benchmark for actual user footage. The skiing domain in YouTube Highlights (Sun et al., ECCV 2014) has ground-truth highlight labels for skiing clips — directly matching the user's use case.
+
+```bash
+# Download skiing subset (~30 videos, ternary labels: 1=highlight, 0=normal, -1=non-highlight)
+# https://github.com/aliensunmin/DomainSpecificHighlight
+
+# Generate a skiing profile
+# (Claude Code writes profile_skiing.json with steep energy curve, high loudness weight)
+
+python pipeline.py score \
+  --chunks-json <skiing_vid>.json \
+  --profile profile_skiing.json \
+  --audio --update
+
+# Evaluate: mAP of our scored ranking vs ground-truth highlight labels
+python3 eval/yt_highlights_eval.py --domain skiing
+```
+
+Target: mAP improvement over no-profile baseline on skiing videos.
+
+### Eval scripts to build
+
+| Script | Input | Output |
+|---|---|---|
+| `eval/tvsum_eval.py` | `/tmp/tvsum/chunks/*.json` + `/tmp/tvsum/ydata-tvsum50.mat` | Kendall's τ and Spearman's ρ per video + average |
+| `eval/yt_highlights_eval.py` | scored chunks JSON + YT Highlights labels | mAP per domain |
+
+Both scripts already have their logic prototyped in the session — they just need to be extracted into standalone files.
