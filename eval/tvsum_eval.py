@@ -26,13 +26,13 @@ DEFAULT_CHUNKS = "/tmp/tvsum/chunks"
 
 def load_tvsum(mat_path: str) -> dict[str, np.ndarray]:
     """Return {youtube_id: gt_score_array} from TVSum .mat file."""
-    f = h5py.File(mat_path, "r")
-    tv = f["tvsum50"]
-    out = {}
-    for i in range(50):
-        vid = "".join(chr(c) for c in f[tv["video"][i, 0]][:].flatten())
-        gt  = f[tv["gt_score"][i, 0]][:].flatten()
-        out[vid] = gt
+    with h5py.File(mat_path, "r") as f:
+        tv = f["tvsum50"]
+        out = {}
+        for i in range(50):
+            vid = "".join(chr(c) for c in f[tv["video"][i, 0]][:].flatten())
+            gt  = f[tv["gt_score"][i, 0]][:].flatten()
+            out[vid] = gt
     return out
 
 
@@ -53,6 +53,8 @@ def gt_chunk_means(chunks_json: str, gt_frames: np.ndarray) -> list[float]:
     data = json.load(open(chunks_json))
     chunks = data["chunks"]
     duration = data["duration"]
+    if duration <= 0:
+        return [0.0] * len(chunks)
     fps = len(gt_frames) / duration
     means = []
     for ch in chunks:
