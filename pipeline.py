@@ -527,31 +527,37 @@ def extract_loudness(video_path: str, start: float, end: float) -> float | None:
     return float(m.group(1)) if m else None
 
 
-def compute_chunk_score(chunk: dict, loudness_db: float | None = None) -> float:
-    """Score a chunk 0–5 from structured fields + optional audio loudness.
+def compute_chunk_score(chunk: dict, loudness_db: float | None = None, profile: dict | None = None) -> float:
+    weights = (profile or {}).get("scoring", {})
 
-    energy:   high=3 / medium=2 / low=1 / unknown=1.5
-    quality:  any non-good issue → -1.5
-    loudness: maps -60dB .. -10dB → 0 .. +1 bonus
-    """
+    energy_w = weights.get("energy_weights", {"high": 3.0, "medium": 2.0, "low": 1.0})
+    quality_penalty = weights.get("quality_penalty", -1.5)
+    loudness_weight = weights.get("loudness_weight", 1.0)
+    shot_bonuses = weights.get("shot_type_bonus", {})
+
     score = 0.0
 
     energy = (chunk.get("energy") or "").lower()
     if "high" in energy:
-        score += 3.0
+        score += energy_w.get("high", 3.0)
     elif "medium" in energy:
-        score += 2.0
+        score += energy_w.get("medium", 2.0)
     elif "low" in energy:
-        score += 1.0
+        score += energy_w.get("low", 1.0)
     else:
-        score += 1.5
+        score += (energy_w.get("high", 3.0) + energy_w.get("low", 1.0)) / 2
 
-    quality = (chunk.get("quality") or "good").lower()
-    if quality != "good":
-        score -= 1.5
+    if (chunk.get("quality") or "good").lower() != "good":
+        score += quality_penalty
 
     if loudness_db is not None:
-        score += max(0.0, min(1.0, (loudness_db + 60) / 50))
+        score += max(0.0, min(1.0, (loudness_db + 60) / 50)) * loudness_weight
+
+    shot = (chunk.get("shot") or "").lower()
+    for shot_key, bonus in shot_bonuses.items():
+        if shot_key.lower() in shot:
+            score += bonus
+            break
 
     return round(max(0.0, score), 2)
 
