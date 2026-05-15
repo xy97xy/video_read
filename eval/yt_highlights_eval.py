@@ -19,7 +19,7 @@ Usage:
     --profile /tmp/profile_skiing.json
 """
 from __future__ import annotations
-import argparse, json
+import argparse, json, math
 from pathlib import Path
 import numpy as np
 import sys
@@ -67,7 +67,7 @@ def align_scores_to_segments(
     seg_scores = [0.0] * n_segments
     for start, end, score in chunk_scores:
         seg_start = int(start / SEGMENT_DURATION)
-        seg_end   = min(int(end / SEGMENT_DURATION) + 1, n_segments)
+        seg_end   = min(math.ceil(end / SEGMENT_DURATION), n_segments)
         for s in range(seg_start, seg_end):
             seg_scores[s] = max(seg_scores[s], score)
     return seg_scores
