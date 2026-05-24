@@ -1,4 +1,4 @@
-import json, sys, os, time
+import json, sys, os, time, sqlite3, subprocess
 from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from photos.metadata import find_media_files, extract_metadata
@@ -72,3 +72,32 @@ def test_extract_metadata_no_sidecar_stem_fallback(tmp_path):
 
     taken_at, lat, lon = extract_metadata(img)
     assert taken_at == 1720000099
+
+
+def test_scan_creates_db(tmp_path):
+    takeout = tmp_path / "Takeout" / "Google Photos" / "Photos from 2024"
+    takeout.mkdir(parents=True)
+    img = takeout / "IMG_0001.jpg"
+    img.write_bytes(b"fake")
+    sidecar = takeout / "IMG_0001.jpg.json"
+    sidecar.write_text(json.dumps({
+        "photoTakenTime": {"timestamp": "1720000000"},
+        "geoData": {"latitude": 64.1, "longitude": -21.9, "altitude": 0.0}
+    }))
+
+    db_path = str(tmp_path / "photos.db")
+    result = subprocess.run(
+        [sys.executable, "photos.py", "scan",
+         "--takeout-dir", str(tmp_path / "Takeout"),
+         "--db", db_path],
+        capture_output=True, text=True,
+        cwd=os.path.dirname(os.path.dirname(__file__))
+    )
+    assert result.returncode == 0, result.stderr
+
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute("SELECT path, taken_at, lat, lon FROM photos").fetchall()
+    conn.close()
+    assert len(rows) == 1
+    assert rows[0][1] == 1720000000
+    assert abs(rows[0][2] - 64.1) < 0.01

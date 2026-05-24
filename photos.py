@@ -1,10 +1,68 @@
 #!/usr/bin/env python3
 import argparse
+import json
+import sqlite3
 import sys
+import time
+from pathlib import Path
+
+from tqdm import tqdm
+
+from photos.metadata import find_media_files, extract_metadata, reverse_geocode
+
+
+def _init_db(db_path: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS photos (
+            id         INTEGER PRIMARY KEY,
+            path       TEXT UNIQUE,
+            taken_at   INTEGER,
+            lat        REAL,
+            lon        REAL,
+            place      TEXT,
+            cluster_id INTEGER
+        )
+    """)
+    conn.commit()
+    return conn
 
 
 def cmd_scan(args):
-    print("scan: not implemented yet")
+    conn = _init_db(args.db)
+    files = find_media_files(args.takeout_dir)
+    print(f"Found {len(files)} media files — scanning...")
+
+    geocode_cache: dict[tuple, str | None] = {}
+    n_gps = 0
+    n_dated = 0
+
+    for path in tqdm(files, unit="photo"):
+        taken_at, lat, lon = extract_metadata(path)
+        place = None
+
+        if lat is not None:
+            n_gps += 1
+            cell = (round(lat / 0.1) * 0.1, round(lon / 0.1) * 0.1)
+            if cell not in geocode_cache:
+                geocode_cache[cell] = reverse_geocode(lat, lon)
+            place = geocode_cache[cell]
+
+        if taken_at:
+            n_dated += 1
+
+        conn.execute(
+            "INSERT OR IGNORE INTO photos (path, taken_at, lat, lon, place) VALUES (?,?,?,?,?)",
+            (str(path), taken_at, lat, lon, place)
+        )
+
+    conn.commit()
+    conn.close()
+    total = len(files)
+    print(f"\n✓ Scanned {total} photos")
+    print(f"  {n_dated}/{total} have date info")
+    print(f"  {n_gps}/{total}  have GPS")
+    print(f"  Saved to {args.db}")
 
 
 def cmd_cluster(args):
