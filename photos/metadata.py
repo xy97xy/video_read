@@ -47,29 +47,29 @@ def _exif_metadata(path: Path) -> tuple[int | None, float | None, float | None]:
     if not _PIL_AVAILABLE or path.suffix.lower() not in IMAGE_EXTENSIONS - {'.heic'}:
         return None, None, None
     try:
-        img = Image.open(path)
-        exif = img.getexif()
-        if not exif:
-            return None, None, None
+        with Image.open(path) as img:
+            exif = img.getexif()
+            if not exif:
+                return None, None, None
 
-        taken_at = None
-        dt_str = exif.get(36867) or exif.get(306)   # DateTimeOriginal or DateTime
-        if dt_str:
-            try:
-                taken_at = int(datetime.strptime(dt_str, '%Y:%m:%d %H:%M:%S').timestamp())
-            except ValueError:
-                pass
+            taken_at = None
+            dt_str = exif.get(36867) or exif.get(306)   # DateTimeOriginal or DateTime
+            if dt_str:
+                try:
+                    taken_at = int(datetime.strptime(dt_str, '%Y:%m:%d %H:%M:%S').timestamp())
+                except ValueError:
+                    pass
 
-        lat, lon = None, None
-        gps_ifd = exif.get_ifd(34853)
-        if gps_ifd and 2 in gps_ifd and 4 in gps_ifd:
-            try:
-                lat = _dms_to_decimal(gps_ifd[2], gps_ifd[1])
-                lon = _dms_to_decimal(gps_ifd[4], gps_ifd[3])
-            except Exception:
-                pass
+            lat, lon = None, None
+            gps_ifd = exif.get_ifd(34853)
+            if gps_ifd and 2 in gps_ifd and 4 in gps_ifd:
+                try:
+                    lat = _dms_to_decimal(gps_ifd[2], gps_ifd[1])
+                    lon = _dms_to_decimal(gps_ifd[4], gps_ifd[3])
+                except Exception:
+                    pass
 
-        return taken_at, lat, lon
+            return taken_at, lat, lon
     except Exception:
         return None, None, None
 
@@ -93,11 +93,11 @@ def extract_metadata(path: Path) -> tuple[int | None, float | None, float | None
         except (KeyError, ValueError, TypeError):
             pass
 
-        if taken_at:
+        if taken_at is not None:
             return taken_at, lat, lon
 
     taken_at, lat, lon = _exif_metadata(path)
-    if taken_at:
+    if taken_at is not None:
         return taken_at, lat, lon
 
     return int(path.stat().st_mtime), None, None
