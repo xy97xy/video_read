@@ -37,27 +37,30 @@ def cmd_scan(args):
     n_gps = 0
     n_dated = 0
 
-    for path in tqdm(files, unit="photo"):
-        taken_at, lat, lon = extract_metadata(path)
-        place = None
+    try:
+        for path in tqdm(files, unit="photo"):
+            taken_at, lat, lon = extract_metadata(path)
+            place = None
 
-        if lat is not None:
-            n_gps += 1
-            cell = (round(lat / 0.1) * 0.1, round(lon / 0.1) * 0.1)
-            if cell not in geocode_cache:
-                geocode_cache[cell] = reverse_geocode(lat, lon)
-            place = geocode_cache[cell]
+            if lat is not None:
+                n_gps += 1
+                cell = (round(lat / 0.1) * 0.1, round(lon / 0.1) * 0.1)
+                if cell not in geocode_cache:
+                    geocode_cache[cell] = reverse_geocode(lat, lon)
+                place = geocode_cache[cell]
 
-        if taken_at:
-            n_dated += 1
+            if taken_at:
+                n_dated += 1
 
-        conn.execute(
-            "INSERT OR IGNORE INTO photos (path, taken_at, lat, lon, place) VALUES (?,?,?,?,?)",
-            (str(path), taken_at, lat, lon, place)
-        )
+            conn.execute(
+                "INSERT OR IGNORE INTO photos (path, taken_at, lat, lon, place) VALUES (?,?,?,?,?)",
+                (str(path), taken_at, lat, lon, place)
+            )
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
+
     total = len(files)
     print(f"\n✓ Scanned {total} photos")
     print(f"  {n_dated}/{total} have date info")
