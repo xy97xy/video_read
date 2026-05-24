@@ -9,6 +9,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 from photos.metadata import find_media_files, extract_metadata, reverse_geocode
+from photos.cluster import build_clusters
 
 
 def _init_db(db_path: str) -> sqlite3.Connection:
@@ -69,7 +70,37 @@ def cmd_scan(args):
 
 
 def cmd_cluster(args):
-    print("cluster: not implemented yet")
+    conn = sqlite3.connect(args.db)
+    rows = conn.execute(
+        "SELECT id, path, taken_at, lat, lon, place FROM photos"
+    ).fetchall()
+    conn.close()
+
+    photos = [
+        {"id": r[0], "path": r[1], "taken_at": r[2],
+         "lat": r[3], "lon": r[4], "place": r[5]}
+        for r in rows
+    ]
+
+    clusters = build_clusters(photos, gap_days=args.gap_days, radius_km=args.radius_km)
+
+    conn = sqlite3.connect(args.db)
+    try:
+        for c in clusters:
+            for pid in c["photo_ids"]:
+                conn.execute("UPDATE photos SET cluster_id=? WHERE id=?", (c["id"], pid))
+        conn.commit()
+    finally:
+        conn.close()
+
+    Path(args.clusters).write_text(json.dumps(clusters, indent=2, ensure_ascii=False))
+
+    trips    = sum(1 for c in clusters if c["is_trip"])
+    catchall = sum(1 for c in clusters if not c["is_trip"])
+    total    = sum(c["photo_count"] for c in clusters)
+    print(f"✓ {len(clusters)} clusters from {total} photos")
+    print(f"  {trips} trip(s), {catchall} monthly/catch-all")
+    print(f"  Saved to {args.clusters}")
 
 
 def cmd_review(args):
