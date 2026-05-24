@@ -218,3 +218,9 @@ smolvlm2_space/
 
 eval/*
 !eval/*.py
+
+# Google Photos credentials (never commit)
+credentials.json
+token.json
+photos.db
+clusters.json

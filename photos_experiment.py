@@ -54,7 +54,9 @@ def authenticate() -> Credentials:
 def api_get(creds: Credentials, path: str, params: dict = None) -> dict:
     headers = {"Authorization": f"Bearer {creds.token}"}
     r = req_lib.get(f"{BASE_URL}/{path}", headers=headers, params=params or {})
-    r.raise_for_status()
+    if not r.ok:
+        print(f"HTTP {r.status_code}: {r.text}")
+        r.raise_for_status()
     return r.json()
 
 
@@ -62,7 +64,12 @@ def main():
     print("=== Google Photos API Experiment ===\n")
 
     creds = authenticate()
-    print("✓ Authenticated\n")
+    print(f"✓ Authenticated")
+    print(f"  Token scopes (local): {creds.scopes}")
+    print(f"  Token valid:          {creds.valid}")
+    # Ask Google what scopes are actually in the token
+    ti = req_lib.get(f"https://www.googleapis.com/oauth2/v1/tokeninfo?access_token={creds.token}")
+    print(f"  Token info (Google):  {ti.json()}\n")
 
     # --- 1. List first 5 photos, dump full metadata ---
     print("--- First 5 mediaItems (full metadata) ---")
