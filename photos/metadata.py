@@ -24,8 +24,9 @@ def find_media_files(root: str) -> list[Path]:
 
 def _read_sidecar(path: Path) -> dict | None:
     for candidate in (
-        path.with_suffix(path.suffix + '.json'),   # IMG.jpg.json
-        path.with_name(path.stem + '.json'),        # IMG.json
+        path.parent / (path.name + '.supplemental-metadata.json'),  # IMG.jpg.supplemental-metadata.json (Google Takeout new format)
+        path.with_suffix(path.suffix + '.json'),                     # IMG.jpg.json (older Takeout format)
+        path.with_name(path.stem + '.json'),                         # IMG.json (stem-only fallback)
     ):
         if candidate.exists():
             try:
