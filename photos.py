@@ -104,7 +104,51 @@ def cmd_cluster(args):
 
 
 def cmd_review(args):
-    print("review: not implemented yet")
+    clusters = json.loads(Path(args.clusters).read_text())
+    pending = [c for c in clusters if c.get("is_trip") and not c.get("confirmed")]
+
+    if not pending:
+        print(f"Nothing to review — 0 unconfirmed trips in {args.clusters}")
+        return
+
+    print(f"{len(pending)} trip cluster(s) to review.\n")
+    for c in pending:
+        print(f"Cluster: {c['name']}  ({c['photo_count']} photos,  {c['start']} → {c['end']})")
+        print("Actions: [c]onfirm  [r]ename  [d]iscard  [s]kip  [?]help")
+
+        while True:
+            action = input("> ").strip().lower()
+            if action == "?":
+                print("  c = confirm as trip")
+                print("  r = rename (you choose the album name)")
+                print("  d = discard (moves photos to monthly catch-all)")
+                print("  s = skip for now (leave unconfirmed)")
+            elif action == "c":
+                c["confirmed"] = True
+                print(f"  ✓ Confirmed: {c['name']}")
+                break
+            elif action == "r":
+                new_name = input("  New name: ").strip()
+                if new_name:
+                    c["name"] = new_name
+                c["confirmed"] = True
+                print(f"  ✓ Renamed to: {c['name']}")
+                break
+            elif action == "d":
+                c["is_trip"] = False
+                c["confirmed"] = True
+                print(f"  ✗ Discarded — photos will go to monthly catch-all")
+                break
+            elif action == "s":
+                print(f"  → Skipped")
+                break
+            else:
+                print("  Unknown action. Type ? for help.")
+        print()
+
+    Path(args.clusters).write_text(json.dumps(clusters, indent=2, ensure_ascii=False))
+    confirmed = sum(1 for c in clusters if c.get("confirmed") and c.get("is_trip"))
+    print(f"✓ Saved. {confirmed} confirmed trip(s).")
 
 
 def cmd_organize(args):
