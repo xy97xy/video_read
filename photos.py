@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import re
+import shutil
 import sqlite3
 import sys
 import time
@@ -161,8 +163,56 @@ def cmd_review(args):
     print(f"✓ Saved. {confirmed} confirmed trip(s).")
 
 
+def _sanitize(name: str) -> str:
+    name = name.replace('–', '-').replace('—', '-')
+    name = re.sub(r'[^\w\-]', '-', name)
+    name = re.sub(r'-+', '-', name)
+    return name.strip('-')
+
+
+def _dest_path(folder: Path, filename: str) -> Path:
+    dest = folder / filename
+    if not dest.exists():
+        return dest
+    stem, suffix = Path(filename).stem, Path(filename).suffix
+    n = 2
+    while True:
+        candidate = folder / f"{stem}_{n}{suffix}"
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
 def cmd_organize(args):
-    print("organize: not implemented yet")
+    clusters = json.loads(Path(args.clusters).read_text())
+    conn = sqlite3.connect(args.db)
+    id_to_path = {r[0]: r[1] for r in conn.execute("SELECT id, path FROM photos")}
+    conn.close()
+
+    out = Path(args.output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    n_copied = n_skipped = 0
+    for c in clusters:
+        if not c.get("confirmed"):
+            continue
+        folder_name = _sanitize(c["name"])
+        folder = out / folder_name
+        folder.mkdir(parents=True, exist_ok=True)
+
+        for pid in c["photo_ids"]:
+            src = id_to_path.get(pid)
+            if not src or not Path(src).exists():
+                n_skipped += 1
+                continue
+            dest = _dest_path(folder, Path(src).name)
+            shutil.copy2(src, dest)
+            n_copied += 1
+
+    confirmed = sum(1 for c in clusters if c.get("confirmed"))
+    print(f"✓ {n_copied} photos copied into {confirmed} folder(s) under {args.output_dir}")
+    if n_skipped:
+        print(f"  {n_skipped} skipped (source file not found)")
 
 
 def main():
