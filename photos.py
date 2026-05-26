@@ -117,7 +117,12 @@ def cmd_review(args):
         print("Actions: [c]onfirm  [r]ename  [d]iscard  [s]kip  [?]help")
 
         while True:
-            action = input("> ").strip().lower()
+            try:
+                action = input("> ").strip().lower()
+            except EOFError:
+                print("\nAborted.")
+                Path(args.clusters).write_text(json.dumps(clusters, indent=2, ensure_ascii=False))
+                return
             if action == "?":
                 print("  c = confirm as trip")
                 print("  r = rename (you choose the album name)")
@@ -128,7 +133,12 @@ def cmd_review(args):
                 print(f"  ✓ Confirmed: {c['name']}")
                 break
             elif action == "r":
-                new_name = input("  New name: ").strip()
+                try:
+                    new_name = input("  New name: ").strip()
+                except EOFError:
+                    print("\nAborted.")
+                    Path(args.clusters).write_text(json.dumps(clusters, indent=2, ensure_ascii=False))
+                    return
                 if new_name:
                     c["name"] = new_name
                 c["confirmed"] = True
