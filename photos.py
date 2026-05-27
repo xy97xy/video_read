@@ -24,9 +24,13 @@ def _init_db(db_path: str) -> sqlite3.Connection:
             lat        REAL,
             lon        REAL,
             place      TEXT,
-            cluster_id INTEGER
+            cluster_id INTEGER,
+            discarded  INTEGER DEFAULT 0
         )
     """)
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(photos)")}
+    if "discarded" not in cols:
+        conn.execute("ALTER TABLE photos ADD COLUMN discarded INTEGER DEFAULT 0")
     conn.commit()
     return conn
 
