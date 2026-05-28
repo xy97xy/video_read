@@ -6,6 +6,7 @@ import shutil
 import sqlite3
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 from tqdm import tqdm
@@ -241,7 +242,6 @@ def cmd_dedup(args):
         print(f"✓ Auto-discarded {n_auto} exact duplicate(s)")
 
         # Pass 2: burst groups
-        from datetime import datetime
         rows = conn.execute(
             "SELECT id, path, taken_at FROM photos WHERE discarded = 0"
         ).fetchall()
@@ -285,26 +285,28 @@ def cmd_dedup(args):
                     n_kept += 1
                     break
                 elif action == "p":
-                    try:
-                        choice_str = input(f"  Keep which? (1-{len(group)}): ").strip()
-                    except EOFError:
-                        print("\nAborted.")
-                        return
-                    try:
-                        idx = int(choice_str) - 1
-                        if 0 <= idx < len(group):
-                            chosen = group[idx]
-                            for p in group:
-                                if p["id"] != chosen["id"]:
-                                    conn.execute("UPDATE photos SET discarded=1 WHERE id=?", (p["id"],))
-                                    n_discarded_burst += 1
-                            conn.commit()
-                            n_kept += 1
-                            break
-                        else:
+                    while True:
+                        try:
+                            choice_str = input(f"  Keep which? (1-{len(group)}): ").strip()
+                        except EOFError:
+                            print("\nAborted.")
+                            return
+                        try:
+                            idx = int(choice_str) - 1
+                            if 0 <= idx < len(group):
+                                chosen = group[idx]
+                                for p in group:
+                                    if p["id"] != chosen["id"]:
+                                        conn.execute("UPDATE photos SET discarded=1 WHERE id=?", (p["id"],))
+                                        n_discarded_burst += 1
+                                conn.commit()
+                                n_kept += 1
+                                break
+                            else:
+                                print(f"  Invalid. Enter 1–{len(group)}.")
+                        except ValueError:
                             print(f"  Invalid. Enter 1–{len(group)}.")
-                    except ValueError:
-                        print(f"  Invalid. Enter 1–{len(group)}.")
+                    break
                 elif action == "s":
                     break
                 elif action == "?":
