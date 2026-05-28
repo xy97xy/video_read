@@ -240,13 +240,82 @@ def cmd_dedup(args):
         conn.commit()
         print(f"✓ Auto-discarded {n_auto} exact duplicate(s)")
 
-        # Pass 2: burst groups (placeholder — implemented in Task 4)
+        # Pass 2: burst groups
+        from datetime import datetime
         rows = conn.execute(
             "SELECT id, path, taken_at FROM photos WHERE discarded = 0"
         ).fetchall()
         photos = [{"id": r[0], "path": r[1], "taken_at": r[2]} for r in rows]
         burst_groups = find_burst_groups(photos, window_seconds=args.burst_window)
-        print(f"\n✓ Kept 0, discarded 0 across {len(burst_groups)} burst group(s)")
+
+        def _file_size(p: dict) -> int:
+            try:
+                return Path(p["path"]).stat().st_size
+            except OSError:
+                return 0
+
+        n_kept = n_discarded_burst = 0
+        for group in burst_groups:
+            recommended = max(group, key=_file_size)
+
+            print(f"\nBurst group ({len(group)} photos):")
+            for i, p in enumerate(group, 1):
+                size_mb = _file_size(p) / 1_048_576
+                dt_str = (
+                    datetime.fromtimestamp(p["taken_at"]).strftime("%Y-%m-%d %H:%M:%S")
+                    if p["taken_at"] else ""
+                )
+                arrow = "  ← recommended" if p["id"] == recommended["id"] else ""
+                print(f"  {i}. {Path(p['path']).name}  {size_mb:.1f} MB  {dt_str}{arrow}")
+            print("Actions: [k]eep recommended  [p]ick different  [s]kip  [?]help")
+
+            while True:
+                try:
+                    action = input("> ").strip().lower()
+                except EOFError:
+                    print("\nAborted.")
+                    return
+
+                if action == "k":
+                    for p in group:
+                        if p["id"] != recommended["id"]:
+                            conn.execute("UPDATE photos SET discarded=1 WHERE id=?", (p["id"],))
+                            n_discarded_burst += 1
+                    conn.commit()
+                    n_kept += 1
+                    break
+                elif action == "p":
+                    try:
+                        choice_str = input(f"  Keep which? (1-{len(group)}): ").strip()
+                    except EOFError:
+                        print("\nAborted.")
+                        return
+                    try:
+                        idx = int(choice_str) - 1
+                        if 0 <= idx < len(group):
+                            chosen = group[idx]
+                            for p in group:
+                                if p["id"] != chosen["id"]:
+                                    conn.execute("UPDATE photos SET discarded=1 WHERE id=?", (p["id"],))
+                                    n_discarded_burst += 1
+                            conn.commit()
+                            n_kept += 1
+                            break
+                        else:
+                            print(f"  Invalid. Enter 1–{len(group)}.")
+                    except ValueError:
+                        print(f"  Invalid. Enter 1–{len(group)}.")
+                elif action == "s":
+                    break
+                elif action == "?":
+                    print("  k = keep recommended (largest file), discard others")
+                    print("  p = pick a different photo to keep")
+                    print("  s = skip this group (keep all)")
+                    print("  ? = show this help")
+                else:
+                    print("  Unknown action. Type ? for help.")
+
+        print(f"\n✓ Kept {n_kept}, discarded {n_discarded_burst} across {len(burst_groups)} burst group(s)")
     finally:
         conn.close()
 
