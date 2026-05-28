@@ -15,13 +15,15 @@ def _make_db(tmp_path, photos_data):
     """photos_data: list of (path_obj, taken_at_int)."""
     db = str(tmp_path / "photos.db")
     conn = _init_db(db)
-    for i, (p, t) in enumerate(photos_data, 1):
-        conn.execute(
-            "INSERT INTO photos (id, path, taken_at) VALUES (?,?,?)",
-            (i, str(p), t),
-        )
-    conn.commit()
-    conn.close()
+    try:
+        for i, (p, t) in enumerate(photos_data, 1):
+            conn.execute(
+                "INSERT INTO photos (id, path, taken_at) VALUES (?,?,?)",
+                (i, str(p), t),
+            )
+        conn.commit()
+    finally:
+        conn.close()
     return db
 
 

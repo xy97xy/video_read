@@ -221,35 +221,34 @@ def cmd_organize(args):
 
 
 def cmd_dedup(args):
-    from datetime import datetime
-
     conn = _init_db(args.db)
+    try:
+        # Pass 1: exact duplicates
+        rows = conn.execute(
+            "SELECT id, path, taken_at FROM photos WHERE discarded = 0"
+        ).fetchall()
+        photos = [{"id": r[0], "path": r[1], "taken_at": r[2]} for r in rows]
 
-    # Pass 1: exact duplicates
-    rows = conn.execute(
-        "SELECT id, path, taken_at FROM photos WHERE discarded = 0"
-    ).fetchall()
-    photos = [{"id": r[0], "path": r[1], "taken_at": r[2]} for r in rows]
+        dup_groups = find_exact_duplicates(photos)
+        n_auto = 0
+        for group in dup_groups:
+            keep_id = min(p["id"] for p in group)
+            for p in group:
+                if p["id"] != keep_id:
+                    conn.execute("UPDATE photos SET discarded=1 WHERE id=?", (p["id"],))
+                    n_auto += 1
+        conn.commit()
+        print(f"✓ Auto-discarded {n_auto} exact duplicate(s)")
 
-    dup_groups = find_exact_duplicates(photos)
-    n_auto = 0
-    for group in dup_groups:
-        keep_id = min(p["id"] for p in group)
-        for p in group:
-            if p["id"] != keep_id:
-                conn.execute("UPDATE photos SET discarded=1 WHERE id=?", (p["id"],))
-                n_auto += 1
-    conn.commit()
-    print(f"✓ Auto-discarded {n_auto} exact duplicate(s)")
-
-    # Pass 2: burst groups (placeholder — implemented in Task 4)
-    rows = conn.execute(
-        "SELECT id, path, taken_at FROM photos WHERE discarded = 0"
-    ).fetchall()
-    photos = [{"id": r[0], "path": r[1], "taken_at": r[2]} for r in rows]
-    burst_groups = find_burst_groups(photos, window_seconds=args.burst_window)
-    print(f"\n✓ Kept 0, discarded 0 across {len(burst_groups)} burst group(s)")
-    conn.close()
+        # Pass 2: burst groups (placeholder — implemented in Task 4)
+        rows = conn.execute(
+            "SELECT id, path, taken_at FROM photos WHERE discarded = 0"
+        ).fetchall()
+        photos = [{"id": r[0], "path": r[1], "taken_at": r[2]} for r in rows]
+        burst_groups = find_burst_groups(photos, window_seconds=args.burst_window)
+        print(f"\n✓ Kept 0, discarded 0 across {len(burst_groups)} burst group(s)")
+    finally:
+        conn.close()
 
 
 def main():
