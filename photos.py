@@ -191,8 +191,10 @@ def _dest_path(folder: Path, filename: str) -> Path:
 
 def cmd_organize(args):
     clusters = json.loads(Path(args.clusters).read_text())
-    conn = sqlite3.connect(args.db)
-    id_to_path = {r[0]: r[1] for r in conn.execute("SELECT id, path FROM photos")}
+    conn = _init_db(args.db)
+    id_to_path = {r[0]: r[1] for r in conn.execute(
+        "SELECT id, path FROM photos WHERE discarded = 0"
+    )}
     conn.close()
 
     out = Path(args.output_dir)

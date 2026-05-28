@@ -105,3 +105,43 @@ def test_burst_s_skips_group(tmp_path):
     assert disc[1] == 0
     assert disc[2] == 0
     assert disc[3] == 0
+
+
+def test_organize_skips_discarded(tmp_path):
+    a = tmp_path / "keep.jpg";    a.write_bytes(b"keep this")
+    b = tmp_path / "discard.jpg"; b.write_bytes(b"throw away")
+
+    db = str(tmp_path / "photos.db")
+    conn = _init_db(db)
+    try:
+        conn.execute(
+            "INSERT INTO photos (id, path, taken_at, cluster_id, discarded) VALUES (1,?,1000,1,0)",
+            (str(a),),
+        )
+        conn.execute(
+            "INSERT INTO photos (id, path, taken_at, cluster_id, discarded) VALUES (2,?,1001,1,1)",
+            (str(b),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    clusters = [{
+        "id": 1, "name": "Test Trip", "is_trip": True, "confirmed": True,
+        "photo_count": 2, "photo_ids": [1, 2],
+        "start": "2024-01-01", "end": "2024-01-02", "place": None,
+    }]
+    clusters_path = str(tmp_path / "clusters.json")
+    open(clusters_path, "w").write(json.dumps(clusters))
+
+    out = str(tmp_path / "out")
+    result = subprocess.run(
+        [sys.executable, "photos.py", "organize",
+         "--output-dir", out, "--db", db, "--clusters", clusters_path],
+        capture_output=True, text=True, cwd=PROJ,
+    )
+    assert result.returncode == 0, result.stderr
+
+    files = list((Path(out) / "Test-Trip").iterdir())
+    assert len(files) == 1
+    assert files[0].name == "keep.jpg"

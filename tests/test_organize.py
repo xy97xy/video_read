@@ -17,11 +17,12 @@ def _setup(tmp_path):
     conn = sqlite3.connect(db)
     conn.execute("""CREATE TABLE photos (
         id INTEGER PRIMARY KEY, path TEXT UNIQUE,
-        taken_at INTEGER, lat REAL, lon REAL, place TEXT, cluster_id INTEGER
+        taken_at INTEGER, lat REAL, lon REAL, place TEXT, cluster_id INTEGER,
+        discarded INTEGER DEFAULT 0
     )""")
     for i, p in enumerate(photos):
-        conn.execute("INSERT INTO photos VALUES (?,?,?,?,?,?,?)",
-                     (i+1, p, 1704067200 + i*86400, None, None, None, i//2 + 1))
+        conn.execute("INSERT INTO photos VALUES (?,?,?,?,?,?,?,?)",
+                     (i+1, p, 1704067200 + i*86400, None, None, None, i//2 + 1, 0))
     conn.commit()
     conn.close()
 
