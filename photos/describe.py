@@ -1,7 +1,10 @@
 from __future__ import annotations
 import json
 import logging
+import os
 import re
+import tempfile
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
@@ -49,10 +52,6 @@ def _parse_describe_json(raw: str) -> dict | None:
     return None
 
 
-import os
-import tempfile
-from pathlib import Path
-
 try:
     from pillow_heif import register_heif_opener
     register_heif_opener()
@@ -65,6 +64,7 @@ QWEN_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
 def load_qwen():
     import torch
     from transformers import AutoProcessor, BitsAndBytesConfig, Qwen2_5_VLForConditionalGeneration
+    log.info(f"loading {QWEN_MODEL} (4-bit)...")
     bnb = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_compute_dtype=torch.bfloat16,
@@ -76,6 +76,7 @@ def load_qwen():
         QWEN_MODEL, quantization_config=bnb, device_map="cuda:0"
     )
     model.eval()
+    log.info("qwen loaded")
     return model, processor
 
 
@@ -97,7 +98,9 @@ def _call_qwen(model, processor, messages: list[dict]) -> str:
         if marker in decoded:
             decoded = decoded.split(marker, 1)[1].strip()
             break
-    return decoded.strip()
+    else:
+        decoded = decoded.strip()
+    return decoded
 
 
 def describe_photo(model, processor, path: Path) -> dict:
@@ -111,6 +114,7 @@ def describe_photo(model, processor, path: Path) -> dict:
         if path.suffix.lower() == ".heic":
             img = Image.open(path)
             tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+            tmp.close()
             img.save(tmp.name, "JPEG")
             tmp_name = tmp.name
             img_path = tmp_name
@@ -134,6 +138,9 @@ def describe_photo(model, processor, path: Path) -> dict:
         log.warning(f"describe_photo: 3 parse failures for {path.name}")
         return _NULL
     except Exception as e:
+        import torch
+        if isinstance(e, torch.cuda.OutOfMemoryError):
+            raise
         log.warning(f"describe_photo failed for {path.name}: {e}")
         return _NULL
     finally:
