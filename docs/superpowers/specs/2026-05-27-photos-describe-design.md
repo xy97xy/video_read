@@ -4,6 +4,8 @@
 
 **Pipeline position:** `scan → describe → dedup → cluster → review → organize`
 
+**Hard constraint:** The pipeline never deletes files from disk. Ever. `discarded=1` is a soft flag in the DB — originals stay untouched. Physical deletion is only performed manually by the user. `organize` copies photos to output folders; it never moves or removes the source.
+
 ---
 
 ## Architecture
