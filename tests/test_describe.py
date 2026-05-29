@@ -94,3 +94,10 @@ def test_parse_describe_json_embedded_in_text():
     result = _parse_describe_json(raw)
     assert result is not None
     assert result["scene"] == "city park"
+
+
+def test_describe_photo_returns_nulls_for_missing_file():
+    from photos.describe import describe_photo
+    from pathlib import Path
+    result = describe_photo(None, None, Path("/nonexistent/ghost.jpg"))
+    assert result == {"caption": None, "quality": None, "scene": None, "people": None}
