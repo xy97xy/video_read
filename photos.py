@@ -345,6 +345,50 @@ def cmd_dedup(args):
         conn.close()
 
 
+def cmd_describe(args):
+    from photos.describe import load_qwen, describe_photo
+
+    conn = _init_db(args.db)
+    try:
+        if getattr(args, "force", False):
+            rows = conn.execute(
+                "SELECT id, path FROM photos WHERE discarded = 0"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, path FROM photos WHERE discarded = 0 AND described_at IS NULL"
+            ).fetchall()
+
+        if not rows:
+            print("✓ All photos already described. Use --force to re-describe.")
+            return
+
+        print(f"Loading Qwen2.5-VL ({len(rows)} photos to describe)...")
+        t0 = time.time()
+        model, processor = load_qwen()
+        print(f"Model loaded in {time.time() - t0:.0f}s")
+
+        n_described = 0
+        bar = tqdm(rows, unit="photo")
+        for photo_id, photo_path in bar:
+            p = Path(photo_path)
+            if not p.exists():
+                continue
+            bar.set_description(p.name[:40])
+            result = describe_photo(model, processor, p)
+            conn.execute(
+                "UPDATE photos SET caption=?, quality=?, scene=?, people=?, described_at=? WHERE id=?",
+                (result["caption"], result["quality"], result["scene"], result["people"],
+                 int(time.time()), photo_id),
+            )
+            conn.commit()
+            n_described += 1
+
+        print(f"\n✓ Described {n_described} photo(s)")
+    finally:
+        conn.close()
+
+
 def main():
     p = argparse.ArgumentParser(
         prog="photos.py",
@@ -375,10 +419,14 @@ def main():
     d.add_argument("--db", default="photos.db", metavar="DB")
     d.add_argument("--burst-window", type=int, default=3, metavar="SEC")
 
+    desc = sub.add_parser("describe", help="Describe photos with Qwen2.5-VL → store in DB")
+    desc.add_argument("--db", default="photos.db", metavar="DB")
+    desc.add_argument("--force", action="store_true", help="Re-describe already-described photos")
+
     args = p.parse_args()
     {"scan": cmd_scan, "cluster": cmd_cluster,
      "review": cmd_review, "organize": cmd_organize,
-     "dedup": cmd_dedup}[args.subcommand](args)
+     "dedup": cmd_dedup, "describe": cmd_describe}[args.subcommand](args)
 
 
 if __name__ == "__main__":
