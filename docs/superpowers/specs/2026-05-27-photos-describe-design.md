@@ -14,7 +14,7 @@ Two new components:
 - **`cmd_describe` in `photos.py`** — subcommand handler: loads model once, iterates undescribed photos, stores results
 
 **JSON output strategy:**
-- **Qwen (local):** constrained generation via `outlines` — JSON schema enforced at the token level, guaranteed valid output, no parse fallback needed
+- **Qwen (local):** prompt-based with retry loop — ask for JSON, try to parse, if invalid retry up to 3 times with feedback showing Qwen exactly what it got wrong. After 3 failures store nulls and set `described_at`.
 - **Claude CLI hooks (future, Phase 2+):** recommendation review steps (deletion suggestions, album names, burst picks) will surface via Claude Code hooks so the user has final say before any action is taken
 
 DB change: add `caption`, `quality`, `scene`, `people`, `described_at` columns to the `photos` table. `_init_db()` handles migration for existing DBs.
@@ -50,45 +50,44 @@ Applied in `_init_db()` via migration: check `PRAGMA table_info(photos)` and `AL
 
 ---
 
-## Qwen Output Schema (outlines constrained generation)
+## Qwen Prompt and Retry Loop
 
-`outlines` enforces this JSON schema at token-generation time — no prompt tricks needed, output is always valid:
-
-```python
-DESCRIBE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "caption": {"type": "string"},
-        "quality": {"type": "string", "enum": ["good", "blurry", "dark", "overexposed", "obstructed"]},
-        "scene":   {"type": "string"},
-        "people":  {"type": "string", "enum": ["none", "one", "few", "many"]}
-    },
-    "required": ["caption", "quality", "scene", "people"]
-}
+**Prompt:**
+```
+Describe this photo. Reply with ONLY this JSON — no markdown, no extra text:
+{"caption": "one sentence describing the main subject and what is happening",
+ "quality": "one word: good, blurry, dark, overexposed, or obstructed",
+ "scene": "brief location context, e.g. mountain trail, indoor kitchen, city street",
+ "people": "one word: none, one, few, or many"}
 ```
 
-A short prompt still accompanies the schema to guide content:
+**Retry loop (up to 3 attempts):**
+If the response cannot be parsed as valid JSON with the required fields, retry with feedback:
 ```
-Describe this photo: what is the main subject, where is it taken, how many people are visible, and what is the image quality?
+Your response was not valid JSON. Required format:
+{"caption": "...", "quality": "good|blurry|dark|overexposed|obstructed", "scene": "...", "people": "none|one|few|many"}
+Your response was: <previous raw output>
+Please try again with ONLY the JSON object.
 ```
+After 3 failed attempts: store all fields as NULL, set `described_at` to now, log a warning.
 
 ---
 
 ## `photos/describe.py` Functions
 
 ```python
-def load_qwen() -> tuple[model, generator]:
-    """Load Qwen2.5-VL-7B-Instruct 4-bit quantized + outlines JSON generator.
-    ~30s, ~5GB VRAM. Returns (model, outlines_generator)."""
+def load_qwen() -> tuple[model, processor]:
+    """Load Qwen2.5-VL-7B-Instruct 4-bit quantized. ~30s, ~5GB VRAM."""
 
-def describe_photo(model, generator, path: Path) -> dict:
-    """Run Qwen on a single photo via outlines constrained generation.
-    Returns {caption, quality, scene, people} — guaranteed schema-valid.
+def describe_photo(model, processor, path: Path) -> dict:
+    """Run Qwen on a single photo with up to 3 retry attempts on invalid JSON.
+    Returns {caption, quality, scene, people}.
     HEIC files are converted to a JPEG temp file via pillow-heif before inference.
-    Returns dict with all None values on any failure (e.g. file missing, CUDA OOM)."""
+    Returns dict with all None values on any failure (file missing, CUDA OOM, 3 parse failures)."""
 
-def _build_schema() -> dict:
-    """Return the JSON schema dict used for outlines constrained generation."""
+def _parse_describe_json(raw: str) -> dict | None:
+    """Try to parse Qwen output as valid JSON with required fields.
+    Returns dict on success, None on failure (caller handles retry)."""
 ```
 
 ---
@@ -137,7 +136,6 @@ After registration, `Image.open()` handles `.heic`/`.HEIC` files transparently. 
 Add to `requirements.txt`:
 ```
 pillow-heif>=0.13.0
-outlines>=0.1.0
 ```
 
 ---
@@ -146,9 +144,10 @@ outlines>=0.1.0
 
 ### `tests/test_describe.py` — unit tests (no GPU required)
 
-- `test_build_schema_has_required_fields` — schema contains caption, quality, scene, people as required
-- `test_build_schema_quality_enum` — quality field has correct enum values
-- `test_build_schema_people_enum` — people field has correct enum values
+- `test_parse_describe_json_valid` — valid JSON → correct dict
+- `test_parse_describe_json_missing_fields` — JSON missing required fields → returns None (triggers retry)
+- `test_parse_describe_json_malformed` — non-JSON string → returns None
+- `test_parse_describe_json_strips_markdown` — ` ```json\n{...}\n``` ` → correctly parsed
 - `test_db_migration_adds_describe_columns` — old DB without describe columns → `_init_db` adds all 5
 - `test_describe_skips_missing_file` — photo with non-existent path → skipped, `described_at` stays NULL
 
