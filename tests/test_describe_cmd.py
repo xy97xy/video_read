@@ -65,7 +65,7 @@ def test_describe_subcommand_in_help():
 
 
 def test_cmd_describe_exits_early_when_all_described(tmp_path):
-    """When all photos already have described_at set, model is never loaded."""
+    """When all photos already have described_at set, model is never loaded and DB is unchanged."""
     db = str(tmp_path / "photos.db")
     conn = _init_db(db)
     conn.execute(
@@ -75,9 +75,54 @@ def test_cmd_describe_exits_early_when_all_described(tmp_path):
     conn.close()
 
     args = argparse.Namespace(db=db, force=False)
-    with patch("photos.describe.load_qwen") as mock_load:
-        cmd_describe(args)
-    mock_load.assert_not_called()
+
+    # No GPU mock needed — if the guard works, load_qwen is never imported/called.
+    # If load_qwen were called, it would crash (no GPU in test env), causing the test to fail.
+    # That crash IS the signal — this test would fail if the early-return guard broke.
+    with patch("photos.describe.load_qwen", side_effect=RuntimeError("should not be called")):
+        cmd_describe(args)  # must complete without raising
+
+    # Verify DB row is unchanged
+    conn = sqlite3.connect(db)
+    val = conn.execute("SELECT described_at FROM photos WHERE id=1").fetchone()[0]
+    conn.close()
+    assert val == 9999, "described_at should be unchanged"
+
+
+def test_cmd_describe_writes_result_to_db(tmp_path):
+    """File exists → describe_photo called → DB row updated with caption and described_at."""
+    real_file = tmp_path / "photo.jpg"
+    real_file.write_bytes(b"fake jpeg data")
+
+    db = str(tmp_path / "photos.db")
+    conn = _init_db(db)
+    conn.execute(
+        "INSERT INTO photos (id, path, taken_at) VALUES (1, ?, 1000)",
+        (str(real_file),),
+    )
+    conn.commit()
+    conn.close()
+
+    args = argparse.Namespace(db=db, force=False)
+    mock_model = MagicMock()
+    mock_processor = MagicMock()
+    fake_result = {"caption": "a sunny park", "quality": "good", "scene": "park", "people": "few"}
+
+    with patch("photos.describe.load_qwen", return_value=(mock_model, mock_processor)):
+        with patch("photos.describe.describe_photo", return_value=fake_result):
+            cmd_describe(args)
+
+    conn = sqlite3.connect(db)
+    row = conn.execute(
+        "SELECT caption, quality, scene, people, described_at FROM photos WHERE id=1"
+    ).fetchone()
+    conn.close()
+
+    assert row[0] == "a sunny park"
+    assert row[1] == "good"
+    assert row[2] == "park"
+    assert row[3] == "few"
+    assert row[4] is not None, "described_at should be set"
 
 
 def test_cmd_describe_skips_missing_file(tmp_path):
