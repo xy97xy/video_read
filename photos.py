@@ -20,19 +20,33 @@ def _init_db(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS photos (
-            id         INTEGER PRIMARY KEY,
-            path       TEXT UNIQUE,
-            taken_at   INTEGER,
-            lat        REAL,
-            lon        REAL,
-            place      TEXT,
-            cluster_id INTEGER,
-            discarded  INTEGER DEFAULT 0
+            id           INTEGER PRIMARY KEY,
+            path         TEXT UNIQUE,
+            taken_at     INTEGER,
+            lat          REAL,
+            lon          REAL,
+            place        TEXT,
+            cluster_id   INTEGER,
+            discarded    INTEGER DEFAULT 0,
+            caption      TEXT,
+            quality      TEXT,
+            scene        TEXT,
+            people       TEXT,
+            described_at INTEGER
         )
     """)
     cols = {row[1] for row in conn.execute("PRAGMA table_info(photos)")}
-    if "discarded" not in cols:
-        conn.execute("ALTER TABLE photos ADD COLUMN discarded INTEGER DEFAULT 0")
+    migrations = [
+        ("discarded",    "ALTER TABLE photos ADD COLUMN discarded    INTEGER DEFAULT 0"),
+        ("caption",      "ALTER TABLE photos ADD COLUMN caption      TEXT"),
+        ("quality",      "ALTER TABLE photos ADD COLUMN quality      TEXT"),
+        ("scene",        "ALTER TABLE photos ADD COLUMN scene        TEXT"),
+        ("people",       "ALTER TABLE photos ADD COLUMN people       TEXT"),
+        ("described_at", "ALTER TABLE photos ADD COLUMN described_at INTEGER"),
+    ]
+    for col, sql in migrations:
+        if col not in cols:
+            conn.execute(sql)
     conn.commit()
     return conn
 
@@ -117,6 +131,13 @@ def cmd_review(args):
 
     if not pending:
         print(f"Nothing to review — 0 unconfirmed trips in {args.clusters}")
+        return
+
+    if getattr(args, "yes", False):
+        for c in pending:
+            c["confirmed"] = True
+        Path(args.clusters).write_text(json.dumps(clusters, indent=2, ensure_ascii=False))
+        print(f"✓ Auto-confirmed {len(pending)} trip cluster(s)")
         return
 
     print(f"{len(pending)} trip cluster(s) to review.\n")
@@ -343,6 +364,7 @@ def main():
 
     r = sub.add_parser("review", help="Interactively review trip clusters")
     r.add_argument("--clusters", default="clusters.json", metavar="FILE")
+    r.add_argument("--yes", action="store_true", help="Auto-confirm all pending trips")
 
     o = sub.add_parser("organize", help="Copy photos into organised folders")
     o.add_argument("--output-dir", required=True, metavar="DIR")
