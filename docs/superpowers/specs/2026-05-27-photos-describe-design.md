@@ -10,8 +10,12 @@
 
 Two new components:
 
-- **`photos/describe.py`** — pure functions: `load_qwen()`, `describe_photo()`, `_parse_describe_json()`
+- **`photos/describe.py`** — pure functions: `load_qwen()`, `describe_photo()`, `_build_schema()`
 - **`cmd_describe` in `photos.py`** — subcommand handler: loads model once, iterates undescribed photos, stores results
+
+**JSON output strategy:**
+- **Qwen (local):** constrained generation via `outlines` — JSON schema enforced at the token level, guaranteed valid output, no parse fallback needed
+- **Claude CLI hooks (future, Phase 2+):** recommendation review steps (deletion suggestions, album names, burst picks) will surface via Claude Code hooks so the user has final say before any action is taken
 
 DB change: add `caption`, `quality`, `scene`, `people`, `described_at` columns to the `photos` table. `_init_db()` handles migration for existing DBs.
 
@@ -46,14 +50,26 @@ Applied in `_init_db()` via migration: check `PRAGMA table_info(photos)` and `AL
 
 ---
 
-## Qwen Prompt
+## Qwen Output Schema (outlines constrained generation)
 
+`outlines` enforces this JSON schema at token-generation time — no prompt tricks needed, output is always valid:
+
+```python
+DESCRIBE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "caption": {"type": "string"},
+        "quality": {"type": "string", "enum": ["good", "blurry", "dark", "overexposed", "obstructed"]},
+        "scene":   {"type": "string"},
+        "people":  {"type": "string", "enum": ["none", "one", "few", "many"]}
+    },
+    "required": ["caption", "quality", "scene", "people"]
+}
 ```
-Analyze this photo. Reply with ONLY this JSON — no markdown, no extra text:
-{"caption": "one sentence describing the main subject and what is happening",
- "quality": "one word: good, blurry, dark, overexposed, or obstructed",
- "scene": "brief location context, e.g. mountain trail, indoor kitchen, city street",
- "people": "one word: none, one, few, or many"}
+
+A short prompt still accompanies the schema to guide content:
+```
+Describe this photo: what is the main subject, where is it taken, how many people are visible, and what is the image quality?
 ```
 
 ---
@@ -61,17 +77,18 @@ Analyze this photo. Reply with ONLY this JSON — no markdown, no extra text:
 ## `photos/describe.py` Functions
 
 ```python
-def load_qwen() -> tuple[model, processor]:
-    """Load Qwen2.5-VL-7B-Instruct 4-bit quantized. ~30s, ~5GB VRAM."""
+def load_qwen() -> tuple[model, generator]:
+    """Load Qwen2.5-VL-7B-Instruct 4-bit quantized + outlines JSON generator.
+    ~30s, ~5GB VRAM. Returns (model, outlines_generator)."""
 
-def describe_photo(model, processor, path: Path) -> dict:
-    """Run Qwen on a single photo. Returns {caption, quality, scene, people}.
+def describe_photo(model, generator, path: Path) -> dict:
+    """Run Qwen on a single photo via outlines constrained generation.
+    Returns {caption, quality, scene, people} — guaranteed schema-valid.
     HEIC files are converted to a JPEG temp file via pillow-heif before inference.
-    Returns dict with all None values on any failure."""
+    Returns dict with all None values on any failure (e.g. file missing, CUDA OOM)."""
 
-def _parse_describe_json(raw: str) -> dict:
-    """Extract JSON from Qwen output. Falls back gracefully on malformed output.
-    Returns {caption, quality, scene, people} — missing fields become None."""
+def _build_schema() -> dict:
+    """Return the JSON schema dict used for outlines constrained generation."""
 ```
 
 ---
@@ -120,6 +137,7 @@ After registration, `Image.open()` handles `.heic`/`.HEIC` files transparently. 
 Add to `requirements.txt`:
 ```
 pillow-heif>=0.13.0
+outlines>=0.1.0
 ```
 
 ---
@@ -128,10 +146,9 @@ pillow-heif>=0.13.0
 
 ### `tests/test_describe.py` — unit tests (no GPU required)
 
-- `test_parse_describe_json_valid` — valid JSON → correct dict
-- `test_parse_describe_json_missing_fields` — JSON missing some fields → missing fields are None, present fields populated
-- `test_parse_describe_json_malformed` — non-JSON output → all fields None, no exception raised
-- `test_parse_describe_json_strips_markdown` — ` ```json\n{...}\n``` ` → correctly parsed
+- `test_build_schema_has_required_fields` — schema contains caption, quality, scene, people as required
+- `test_build_schema_quality_enum` — quality field has correct enum values
+- `test_build_schema_people_enum` — people field has correct enum values
 - `test_db_migration_adds_describe_columns` — old DB without describe columns → `_init_db` adds all 5
 - `test_describe_skips_missing_file` — photo with non-existent path → skipped, `described_at` stays NULL
 
