@@ -56,3 +56,41 @@ def test_described_at_defaults_to_null(tmp_path):
     val = conn.execute("SELECT described_at FROM photos").fetchone()[0]
     conn.close()
     assert val is None
+
+
+from photos.describe import _parse_describe_json
+
+
+def test_parse_describe_json_valid():
+    raw = '{"caption": "two people hiking", "quality": "good", "scene": "mountain trail", "people": "few"}'
+    result = _parse_describe_json(raw)
+    assert result == {
+        "caption": "two people hiking",
+        "quality": "good",
+        "scene": "mountain trail",
+        "people": "few",
+    }
+
+
+def test_parse_describe_json_missing_fields():
+    raw = '{"caption": "hikers", "quality": "good"}'
+    assert _parse_describe_json(raw) is None
+
+
+def test_parse_describe_json_malformed():
+    assert _parse_describe_json("not json at all") is None
+    assert _parse_describe_json("") is None
+
+
+def test_parse_describe_json_strips_markdown():
+    raw = '```json\n{"caption": "sunset", "quality": "good", "scene": "beach", "people": "none"}\n```'
+    result = _parse_describe_json(raw)
+    assert result is not None
+    assert result["caption"] == "sunset"
+
+
+def test_parse_describe_json_embedded_in_text():
+    raw = 'Here is the JSON: {"caption": "park", "quality": "good", "scene": "city park", "people": "many"} Done.'
+    result = _parse_describe_json(raw)
+    assert result is not None
+    assert result["scene"] == "city park"
