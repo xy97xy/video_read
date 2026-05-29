@@ -61,14 +61,24 @@ Describe this photo. Reply with ONLY this JSON — no markdown, no extra text:
  "people": "one word: none, one, few, or many"}
 ```
 
-**Retry loop (up to 3 attempts):**
-If the response cannot be parsed as valid JSON with the required fields, retry with feedback:
+**Retry loop (multi-turn conversation, up to 3 attempts):**
+The image is sent once in Turn 1. On parse failure, a new user turn is appended to the conversation history so Qwen sees its own bad output and corrects it — no image re-processing:
+
 ```
-Your response was not valid JSON. Required format:
-{"caption": "...", "quality": "good|blurry|dark|overexposed|obstructed", "scene": "...", "people": "none|one|few|many"}
-Your response was: <previous raw output>
-Please try again with ONLY the JSON object.
+Turn 1 user:  [image] + prompt asking for JSON
+Turn 1 qwen:  <response>
+  → parse succeeds → done
+  → parse fails →
+Turn 2 user:  "That was not valid JSON. Required format:
+               {"caption": "...", "quality": "good|blurry|dark|overexposed|obstructed",
+                "scene": "...", "people": "none|one|few|many"}
+               Your response was: <previous raw output>
+               Output ONLY the JSON object."
+Turn 2 qwen:  <response>
+  → parse succeeds → done
+  → parse fails → (repeat up to turn 3)
 ```
+
 After 3 failed attempts: store all fields as NULL, set `described_at` to now, log a warning.
 
 ---
