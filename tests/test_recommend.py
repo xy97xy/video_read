@@ -50,14 +50,14 @@ def test_flagged_defaults_to_zero(tmp_path):
     assert val == 0
 
 
-from photos.recommend import auto_flag_quality
+from photos.recommend import auto_flag_quality, build_report
 
 
 def _make_conn(tmp_path, rows):
     """rows: list of dicts. Required key: id. Optional: path, quality, scene,
     caption, people, cluster_id, discarded, flagged."""
     mod = _load_photos_module()
-    db = str(tmp_path / f"photos_{len(rows)}.db")
+    db = str(tmp_path / "photos.db")
     conn = mod._init_db(db)
     for r in rows:
         conn.execute(
@@ -123,4 +123,81 @@ def test_auto_flag_quality_all_quality_values(tmp_path):
     ])
     n = auto_flag_quality(conn)
     assert n == 2  # only overexposed and obstructed
+    conn.close()
+
+
+def test_build_report_creates_file(tmp_path):
+    conn = _make_conn(tmp_path, [
+        {"id": 1, "quality": "good", "cluster_id": 1,
+         "scene": "beach", "caption": "waves", "people": "none"},
+    ])
+    clusters = [{"id": 1, "name": "Hawaii-2024", "photo_ids": [1]}]
+    clusters_path = tmp_path / "clusters.json"
+    clusters_path.write_text(json.dumps(clusters))
+    out = tmp_path / "recommendations.md"
+
+    result = build_report(conn, clusters_path, out)
+
+    assert result == out
+    assert out.exists()
+    conn.close()
+
+
+def test_build_report_marks_flagged_photos(tmp_path):
+    conn = _make_conn(tmp_path, [
+        {"id": 1, "quality": "good", "flagged": 0},
+        {"id": 2, "quality": "blurry", "flagged": 1},
+    ])
+    out = tmp_path / "recommendations.md"
+    build_report(conn, None, out)
+    text = out.read_text()
+
+    assert "| 1 |" in text
+    assert "| 2 🚩 |" in text
+    conn.close()
+
+
+def test_build_report_unclustered_section(tmp_path):
+    conn = _make_conn(tmp_path, [
+        {"id": 1, "quality": "good", "cluster_id": None},
+    ])
+    out = tmp_path / "recommendations.md"
+    build_report(conn, None, out)
+
+    assert "Unclustered" in out.read_text()
+    conn.close()
+
+
+def test_build_report_excludes_discarded(tmp_path):
+    conn = _make_conn(tmp_path, [
+        {"id": 1, "quality": "good"},
+        {"id": 2, "quality": "blurry", "discarded": 1},
+    ])
+    out = tmp_path / "recommendations.md"
+    build_report(conn, None, out)
+    text = out.read_text()
+
+    assert "fake/2.jpg" not in text
+    conn.close()
+
+
+def test_build_report_uses_cluster_names(tmp_path):
+    conn = _make_conn(tmp_path, [
+        {"id": 1, "quality": "good", "cluster_id": 7},
+    ])
+    clusters = [{"id": 7, "name": "Iceland-2024", "photo_ids": [1]}]
+    clusters_path = tmp_path / "clusters.json"
+    clusters_path.write_text(json.dumps(clusters))
+    out = tmp_path / "recommendations.md"
+    build_report(conn, clusters_path, out)
+
+    assert "Iceland-2024" in out.read_text()
+    conn.close()
+
+
+def test_build_report_creates_parent_dirs(tmp_path):
+    conn = _make_conn(tmp_path, [{"id": 1, "quality": "good"}])
+    out = tmp_path / "nested" / "deep" / "recommendations.md"
+    build_report(conn, None, out)
+    assert out.exists()
     conn.close()
