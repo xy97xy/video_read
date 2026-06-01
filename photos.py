@@ -545,6 +545,55 @@ def cmd_search(args):
         conn.close()
 
 
+def cmd_enhance(args):
+    from photos.enhance import enhance_photo, make_comparison
+    from PIL import Image as _Image
+
+    _VIDEO_EXTS = {'.mp4', '.mov', '.m4v', '.avi'}
+
+    conn = _init_db(args.db)
+    try:
+        rows = conn.execute(
+            "SELECT id, path, quality FROM photos "
+            "WHERE discarded=0 AND described_at IS NOT NULL AND flagged=0"
+        ).fetchall()
+
+        if not rows:
+            print("⚠ No photos have been described yet. Run: python photos.py describe --db <db>")
+            return
+
+        n_enhanced = n_skipped = 0
+        bar = tqdm(rows, unit="photo")
+        for _photo_id, photo_path, quality in bar:
+            p = Path(photo_path)
+            if not p.exists() or p.suffix.lower() in _VIDEO_EXTS:
+                n_skipped += 1
+                continue
+
+            enhanced_path = p.parent / f"{p.stem}_enhanced.jpg"
+            compare_path = p.parent / f"{p.stem}_compare.jpg"
+
+            if not args.force and enhanced_path.exists() and compare_path.exists():
+                n_skipped += 1
+                continue
+
+            try:
+                img = _Image.open(p).convert("RGB")
+                enhanced = enhance_photo(img, quality)
+                enhanced.save(str(enhanced_path), "JPEG", quality=95)
+                comparison = make_comparison(img, enhanced)
+                comparison.save(str(compare_path), "JPEG", quality=95)
+                n_enhanced += 1
+                bar.set_description(p.name[:40])
+            except Exception as e:
+                print(f"\n  Warning: could not enhance {p.name}: {e}")
+                n_skipped += 1
+
+        print(f"\n✓ Enhanced {n_enhanced} photo(s), {n_skipped} skipped")
+    finally:
+        conn.close()
+
+
 def main():
     p = argparse.ArgumentParser(
         prog="photos.py",
@@ -597,12 +646,16 @@ def main():
     sr.add_argument("--limit", type=int, default=20, metavar="N")
     sr.add_argument("--output", default="output/search-results.md", metavar="FILE")
 
+    en = sub.add_parser("enhance", help="Apply color correction to all described photos")
+    en.add_argument("--db", default="photos.db", metavar="DB")
+    en.add_argument("--force", action="store_true", help="Re-enhance already-enhanced photos")
+
     args = p.parse_args()
     {"scan": cmd_scan, "cluster": cmd_cluster,
      "review": cmd_review, "organize": cmd_organize,
      "dedup": cmd_dedup, "describe": cmd_describe,
      "recommend": cmd_recommend, "flag": cmd_flag,
-     "search": cmd_search}[args.subcommand](args)
+     "search": cmd_search, "enhance": cmd_enhance}[args.subcommand](args)
 
 
 if __name__ == "__main__":
