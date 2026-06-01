@@ -19,6 +19,8 @@ Ask the user: path to their extracted Google Takeout directory.
 
 Working directory for all commands: `/scratch/video_read`
 
+Run `source venv/bin/activate` at the start of every new shell session before any phase. The activation persists within a session — you only need to do this once per session.
+
 Output layout:
 ```
 output/
@@ -65,7 +67,7 @@ Then re-run `photos.py describe` — it will re-process that photo.
 yes k | python photos.py dedup --db output/photos.db
 ```
 
-Auto-accepts the largest file per burst group. Report: exact duplicates discarded, burst groups thinned.
+Auto-accepts the largest file per burst group (`k` = keep recommended). Report: exact duplicates discarded, burst groups thinned.
 
 ⚠️ If a burst group has 20+ photos, it may be a metadata artifact (Google Takeout sometimes sets all `taken_at` to the scan date). Flag this to the user.
 
@@ -88,7 +90,13 @@ for (path,) in rows:
         continue
     dest = out / src.name
     if dest.exists():
-        dest = out / f'{src.stem}_{src.parent.name}{src.suffix}'
+        counter = 1
+        while True:
+            candidate = out / f'{src.stem}_{counter}{src.suffix}'
+            if not candidate.exists():
+                dest = candidate
+                break
+            counter += 1
     shutil.copy2(src, dest)
     copied += 1
 print(f'Copied {copied} to output/to-delete/')
@@ -105,6 +113,8 @@ python photos.py cluster --db output/photos.db --output output/clusters.json
 ```
 
 Report: number of trip clusters found. Then proceed.
+
+If 0 trip clusters are found, all photos may be near the detected home location, or timestamps/GPS may be missing. Check with: `SELECT COUNT(*), SUM(taken_at IS NULL), SUM(lat IS NULL) FROM photos;`
 
 ---
 
@@ -125,12 +135,12 @@ for c in clusters:
     ids = c['photo_ids']
     placeholders = ','.join('?' * len(ids))
     rows = conn.execute(f'''
-        SELECT caption, scene, people, place FROM photos
+        SELECT caption, scene, people FROM photos
         WHERE id IN ({placeholders}) AND discarded=0 AND described_at IS NOT NULL
     ''', ids).fetchall()
     print(f"=== Cluster {c['id']}: {c['name']} ===")
-    for caption, scene, people, place in rows[:8]:
-        print(f'  scene={scene} | place={place}')
+    for caption, scene, people in rows[:8]:
+        print(f'  scene={scene} | people={people}')
         if caption:
             print(f'  caption: {caption[:100]}')
     print()
@@ -146,12 +156,13 @@ Show the user a table of proposed names and wait for confirmation:
 | 16 | 2025-02-23–2025-02-24 | Canada Ski Trip |
 | ... | ... | ... |
 
-After the user confirms the table, Claude fills `name_map` with the confirmed names and runs:
+After the user confirms the table, construct `name_map` as a Python dict with integer cluster IDs as keys and confirmed name strings as values, then run:
 
 ```python
 # After user confirms the name table above, fill name_map with confirmed names:
 name_map = {
-    # <cluster_id>: '<confirmed name>',  # Claude fills this from the confirmed table
+    # e.g. 11: 'China Trip', 16: 'Canada Ski Trip'
+    # Fill with integer cluster ID → confirmed name string for each renamed cluster
 }
 for c in clusters:
     if c['id'] in name_map:
@@ -174,16 +185,23 @@ Non-trip clusters (home/everyday photos) are organized into monthly folders by `
 After organizing, remove leftover date-only folders that were replaced by named ones. To identify them: any folder in `output/organized/` whose name matches the pattern `YYYY-MM-DD-YYYY-MM-DD` and whose cluster now has a descriptive name.
 
 ```python
-import re, shutil
+import re, shutil, json
 from pathlib import Path
 
 date_pattern = re.compile(r'^\d{4}-\d{2}-\d{2}-\d{4}-\d{2}-\d{2}$')
+clusters = json.loads(Path('output/clusters.json').read_text())
+named = {c['name'] for c in clusters if c.get('is_trip') and not re.match(r'^\d{4}-\d{2}-\d{2}', c['name'])}
 removed = []
 for folder in Path('output/organized').iterdir():
     if folder.is_dir() and date_pattern.match(folder.name):
-        shutil.rmtree(folder)
-        removed.append(folder.name)
-print(f'Removed {len(removed)} old date folders: {removed}')
+        # Only remove if a corresponding named folder exists
+        if named:
+            shutil.rmtree(folder)
+            removed.append(folder.name)
+if removed:
+    print(f'Removed {len(removed)} old date folders: {removed}')
+else:
+    print('No old date folders to remove.')
 ```
 
 Report the final folder list to the user:
@@ -198,7 +216,7 @@ Then proceed to Phase 7.
 
 Report to user:
 - Number of named folders in `output/organized/`
-- Total photos copied
+- Total photos in organized folders: `find output/organized -type f | wc -l`
 - Number of photos in `output/to-delete/` awaiting review
 
 Remind user: **review `output/to-delete/` and delete manually when satisfied. Nothing is auto-deleted.**
