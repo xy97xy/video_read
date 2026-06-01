@@ -178,14 +178,3 @@ Report to user:
 - Number of photos in `output/to-delete/` awaiting review
 
 Remind user: **review `output/to-delete/` and delete manually when satisfied. Nothing is auto-deleted.**
-
----
-
-## Steps
-
-1. Create `.claude/skills/photos-organizer/SKILL.md` with the content above
-2. Create `.claude/plugin/skills/photos-organizer/SKILL.md` with identical content
-3. Verify both files exist with `ls`
-4. Commit with message: `feat: add photos-organizer skill`
-
-Report back: DONE when complete, or BLOCKED with reason if something prevents completion.
