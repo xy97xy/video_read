@@ -188,20 +188,22 @@ After organizing, remove leftover date-only folders that were replaced by named 
 import re, shutil, json
 from pathlib import Path
 
-date_pattern = re.compile(r'^\d{4}-\d{2}-\d{2}-\d{4}-\d{2}-\d{2}$')
 clusters = json.loads(Path('output/clusters.json').read_text())
-named = {c['name'] for c in clusters if c.get('is_trip') and not re.match(r'^\d{4}-\d{2}-\d{2}', c['name'])}
+date_range_re = re.compile(r'^\d{4}-\d{2}-\d{2}')
+
+# Derive old date-folder names only for clusters that were renamed to a descriptive name
+old_date_folders = set()
+for c in clusters:
+    if c.get('is_trip') and c.get('start') and c.get('end'):
+        if not date_range_re.match(c['name']):  # name was changed from date-range to descriptive
+            old_date_folders.add(f"{c['start']}-{c['end']}")
+
 removed = []
 for folder in Path('output/organized').iterdir():
-    if folder.is_dir() and date_pattern.match(folder.name):
-        # Only remove if a corresponding named folder exists
-        if named:
-            shutil.rmtree(folder)
-            removed.append(folder.name)
-if removed:
-    print(f'Removed {len(removed)} old date folders: {removed}')
-else:
-    print('No old date folders to remove.')
+    if folder.is_dir() and folder.name in old_date_folders:
+        shutil.rmtree(folder)
+        removed.append(folder.name)
+print(f'Removed {len(removed)} old date folders: {removed}')
 ```
 
 Report the final folder list to the user:
