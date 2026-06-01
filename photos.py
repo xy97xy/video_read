@@ -32,7 +32,8 @@ def _init_db(db_path: str) -> sqlite3.Connection:
             quality      TEXT,
             scene        TEXT,
             people       TEXT,
-            described_at INTEGER
+            described_at INTEGER,
+            flagged      INTEGER DEFAULT 0
         )
     """)
     cols = {row[1] for row in conn.execute("PRAGMA table_info(photos)")}
@@ -43,6 +44,7 @@ def _init_db(db_path: str) -> sqlite3.Connection:
         ("scene",        "ALTER TABLE photos ADD COLUMN scene        TEXT"),
         ("people",       "ALTER TABLE photos ADD COLUMN people       TEXT"),
         ("described_at", "ALTER TABLE photos ADD COLUMN described_at INTEGER"),
+        ("flagged",      "ALTER TABLE photos ADD COLUMN flagged      INTEGER DEFAULT 0"),
     ]
     for col, sql in migrations:
         if col not in cols:
