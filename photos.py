@@ -392,6 +392,22 @@ def cmd_describe(args):
         conn.close()
 
 
+def cmd_recommend(args):
+    from photos.recommend import auto_flag_quality, build_report
+
+    conn = _init_db(args.db)
+    try:
+        n = auto_flag_quality(conn)
+        print(f"✓ Auto-flagged {n} photo(s) with non-good quality")
+
+        clusters_path = Path(args.clusters) if Path(args.clusters).exists() else None
+        output_path = build_report(conn, clusters_path, Path(args.output))
+        print(f"✓ Report written to {output_path}")
+        print(f"  Review it, then run: python photos.py flag <id> [id ...]")
+    finally:
+        conn.close()
+
+
 def main():
     p = argparse.ArgumentParser(
         prog="photos.py",
@@ -426,10 +442,16 @@ def main():
     desc.add_argument("--db", default="photos.db", metavar="DB")
     desc.add_argument("--force", action="store_true", help="Re-describe already-described photos")
 
+    rec = sub.add_parser("recommend", help="Auto-flag bad quality photos and write review report")
+    rec.add_argument("--db", default="photos.db", metavar="DB")
+    rec.add_argument("--clusters", default="clusters.json", metavar="FILE")
+    rec.add_argument("--output", default="output/recommendations.md", metavar="FILE")
+
     args = p.parse_args()
     {"scan": cmd_scan, "cluster": cmd_cluster,
      "review": cmd_review, "organize": cmd_organize,
-     "dedup": cmd_dedup, "describe": cmd_describe}[args.subcommand](args)
+     "dedup": cmd_dedup, "describe": cmd_describe,
+     "recommend": cmd_recommend}[args.subcommand](args)
 
 
 if __name__ == "__main__":

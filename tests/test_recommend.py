@@ -264,3 +264,39 @@ def test_set_flagged_mixed_ids(tmp_path):
     assert result["skipped"] == [(2, "already discarded")]
     assert result["not_found"] == [99]
     conn.close()
+
+
+def test_cmd_recommend_auto_flags_and_writes_report(tmp_path):
+    mod = _load_photos_module()
+    db = str(tmp_path / "photos.db")
+    conn = mod._init_db(db)
+    conn.execute(
+        "INSERT INTO photos (id, path, quality) VALUES (1, '/a.jpg', 'blurry')"
+    )
+    conn.execute(
+        "INSERT INTO photos (id, path, quality) VALUES (2, '/b.jpg', 'good')"
+    )
+    conn.commit()
+    conn.close()
+
+    out = tmp_path / "recommendations.md"
+    clusters_path = tmp_path / "clusters.json"
+    clusters_path.write_text("[]")
+
+    import argparse
+    args = argparse.Namespace(
+        db=db,
+        clusters=str(clusters_path),
+        output=str(out),
+    )
+    mod.cmd_recommend(args)
+
+    # blurry photo flagged in DB
+    conn2 = sqlite3.connect(db)
+    flagged = conn2.execute("SELECT flagged FROM photos WHERE id=1").fetchone()[0]
+    conn2.close()
+    assert flagged == 1
+
+    # report written
+    assert out.exists()
+    assert "🚩" in out.read_text()
