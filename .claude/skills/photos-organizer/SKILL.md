@@ -51,6 +51,12 @@ Runs Qwen2.5-VL on all undescribed photos (~12s each on GPU). Already-described 
 
 Report: count described. Then proceed.
 
+If Qwen crashes mid-run and a photo has corrupt data, clear it and re-run:
+```sql
+UPDATE photos SET caption=NULL, quality=NULL, scene=NULL, people=NULL, described_at=NULL WHERE id=<id>;
+```
+Then re-run `photos.py describe` — it will re-process that photo.
+
 ---
 
 ## Phase 3: Dedup + copy discards
@@ -64,6 +70,8 @@ Auto-accepts the largest file per burst group. Report: exact duplicates discarde
 ⚠️ If a burst group has 20+ photos, it may be a metadata artifact (Google Takeout sometimes sets all `taken_at` to the scan date). Flag this to the user.
 
 Then copy all discarded photos to `output/to-delete/` for user review before permanent deletion:
+
+Run with: `python` (venv already activated from Phase 1)
 
 ```python
 import sqlite3, shutil
@@ -138,14 +146,16 @@ Show the user a table of proposed names and wait for confirmation:
 | 16 | 2025-02-23–2025-02-24 | Canada Ski Trip |
 | ... | ... | ... |
 
-After user confirms, update `clusters.json`:
+After the user confirms the table, Claude fills `name_map` with the confirmed names and runs:
 
 ```python
-names = { <id>: '<name>', ... }  # fill from confirmed table
-clusters = json.loads(Path('output/clusters.json').read_text())
+# After user confirms the name table above, fill name_map with confirmed names:
+name_map = {
+    # <cluster_id>: '<confirmed name>',  # Claude fills this from the confirmed table
+}
 for c in clusters:
-    if c['id'] in names:
-        c['name'] = names[c['id']]
+    if c['id'] in name_map:
+        c['name'] = name_map[c['id']]
         c['confirmed'] = True
 Path('output/clusters.json').write_text(json.dumps(clusters, indent=2, ensure_ascii=False))
 print('clusters.json updated')
@@ -159,14 +169,28 @@ print('clusters.json updated')
 python photos.py organize --db output/photos.db --output-dir output/organized --clusters output/clusters.json
 ```
 
+Non-trip clusters (home/everyday photos) are organized into monthly folders by `organize` automatically — they appear as `YYYY-MM` folders alongside the named trip folders.
+
 After organizing, remove leftover date-only folders that were replaced by named ones. To identify them: any folder in `output/organized/` whose name matches the pattern `YYYY-MM-DD-YYYY-MM-DD` and whose cluster now has a descriptive name.
 
-```bash
-# Example — adjust to actual renamed clusters
-rm -rf output/organized/2024-10-23-2024-11-01
-rm -rf output/organized/2025-02-23-2025-02-24
-# ... etc for each renamed cluster
+```python
+import re, shutil
+from pathlib import Path
+
+date_pattern = re.compile(r'^\d{4}-\d{2}-\d{2}-\d{4}-\d{2}-\d{2}$')
+removed = []
+for folder in Path('output/organized').iterdir():
+    if folder.is_dir() and date_pattern.match(folder.name):
+        shutil.rmtree(folder)
+        removed.append(folder.name)
+print(f'Removed {len(removed)} old date folders: {removed}')
 ```
+
+Report the final folder list to the user:
+```bash
+ls output/organized/
+```
+Then proceed to Phase 7.
 
 ---
 
