@@ -47,7 +47,7 @@ def test_cmd_flag_sets_flagged_in_db(tmp_path):
 
     mod = _load_photos_module()
     args = argparse.Namespace(
-        ids=["1"], db=db, clusters=clusters_path,
+        ids=[1], db=db, clusters=clusters_path,
         output_dir=str(out_dir), unflag=False,
     )
     mod.cmd_flag(args)
@@ -63,7 +63,7 @@ def test_cmd_flag_copies_file_to_to_review(tmp_path):
 
     mod = _load_photos_module()
     args = argparse.Namespace(
-        ids=["1"], db=db, clusters=clusters_path,
+        ids=[1], db=db, clusters=clusters_path,
         output_dir=str(out_dir), unflag=False,
     )
     mod.cmd_flag(args)
@@ -86,7 +86,7 @@ def test_cmd_flag_uses_cluster_name_as_subfolder(tmp_path):
 
     mod = _load_photos_module()
     args = argparse.Namespace(
-        ids=["1"], db=db, clusters=clusters_path,
+        ids=[1], db=db, clusters=clusters_path,
         output_dir=str(out_dir), unflag=False,
     )
     mod.cmd_flag(args)
@@ -102,7 +102,7 @@ def test_cmd_flag_unclustered_goes_to_unclustered_folder(tmp_path):
 
     mod = _load_photos_module()
     args = argparse.Namespace(
-        ids=["1"], db=db, clusters=clusters_path,
+        ids=[1], db=db, clusters=clusters_path,
         output_dir=str(out_dir), unflag=False,
     )
     mod.cmd_flag(args)
@@ -116,7 +116,7 @@ def test_cmd_flag_skips_discarded(tmp_path):
 
     mod = _load_photos_module()
     args = argparse.Namespace(
-        ids=["1"], db=db, clusters=clusters_path,
+        ids=[1], db=db, clusters=clusters_path,
         output_dir=str(out_dir), unflag=False,
     )
     mod.cmd_flag(args)
@@ -132,7 +132,7 @@ def test_cmd_flag_unflag_sets_flagged_to_zero(tmp_path):
 
     mod = _load_photos_module()
     args = argparse.Namespace(
-        ids=["1"], db=db, clusters=clusters_path,
+        ids=[1], db=db, clusters=clusters_path,
         output_dir=str(out_dir), unflag=True,
     )
     mod.cmd_flag(args)
@@ -151,9 +151,59 @@ def test_cmd_flag_unflag_removes_copy(tmp_path):
 
     mod = _load_photos_module()
     args = argparse.Namespace(
-        ids=["1"], db=db, clusters=clusters_path,
+        ids=[1], db=db, clusters=clusters_path,
         output_dir=str(out_dir), unflag=True,
     )
     mod.cmd_flag(args)
 
     assert not copy.exists()
+
+
+def test_cmd_flag_unflag_only_removes_correct_cluster_copy(tmp_path):
+    """Unflagging photo A should not delete a same-named photo in a different cluster."""
+    src1 = tmp_path / "IMG_0001.jpg"
+    src1.write_bytes(b"photo1")
+    src2 = tmp_path / "src2" / "IMG_0001.jpg"
+    src2.parent.mkdir()
+    src2.write_bytes(b"photo2")
+
+    clusters = [
+        {"id": 1, "name": "Trip-A", "photo_ids": [1]},
+        {"id": 2, "name": "Trip-B", "photo_ids": [2]},
+    ]
+    mod = _load_photos_module()
+    db = str(tmp_path / "photos.db")
+    conn = mod._init_db(db)
+    conn.execute(
+        "INSERT INTO photos (id, path, cluster_id, flagged) VALUES (1, ?, 1, 1)",
+        (str(src1),),
+    )
+    conn.execute(
+        "INSERT INTO photos (id, path, cluster_id, flagged) VALUES (2, ?, 2, 1)",
+        (str(src2),),
+    )
+    conn.commit()
+    conn.close()
+
+    clusters_path = tmp_path / "clusters.json"
+    clusters_path.write_text(json.dumps(clusters))
+    out_dir = tmp_path / "to-review"
+
+    # Pre-populate both copies in to-review
+    copy1 = out_dir / "Trip-A" / "IMG_0001.jpg"
+    copy2 = out_dir / "Trip-B" / "IMG_0001.jpg"
+    copy1.parent.mkdir(parents=True)
+    copy2.parent.mkdir(parents=True)
+    shutil.copy2(src1, copy1)
+    shutil.copy2(src2, copy2)
+
+    # Unflag only photo 1 (Trip-A)
+    args = argparse.Namespace(
+        ids=[1], db=db, clusters=str(clusters_path),
+        output_dir=str(out_dir), unflag=True,
+    )
+    mod.cmd_flag(args)
+
+    # Trip-A copy deleted, Trip-B copy preserved
+    assert not copy1.exists()
+    assert copy2.exists()

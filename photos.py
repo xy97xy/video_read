@@ -412,19 +412,29 @@ def cmd_flag(args):
     import shutil as _shutil
     from photos.recommend import set_flagged
 
-    ids = [int(x) for x in args.ids]
+    ids = args.ids
     conn = _init_db(args.db)
     try:
         result = set_flagged(conn, ids, flag=not args.unflag)
 
         if args.unflag:
             out = Path(args.output_dir)
+            cluster_names: dict[int, str] = {}
+            clusters_path = Path(args.clusters)
+            if clusters_path.exists():
+                for c in json.loads(clusters_path.read_text()):
+                    cluster_names[c["id"]] = c["name"]
             for pid in result["done"]:
-                row = conn.execute("SELECT path FROM photos WHERE id=?", (pid,)).fetchone()
+                row = conn.execute(
+                    "SELECT path, cluster_id FROM photos WHERE id=?", (pid,)
+                ).fetchone()
                 if not row:
                     continue
-                fname = Path(row[0]).name
-                for f in out.rglob(fname):
+                src_path, cluster_id = row
+                cname = cluster_names.get(cluster_id, "unclustered") if cluster_id else "unclustered"
+                cluster_dir = out / cname
+                fname = Path(src_path).name
+                for f in cluster_dir.rglob(fname):
                     try:
                         f.unlink()
                     except OSError:
@@ -506,7 +516,7 @@ def main():
     rec.add_argument("--output", default="output/recommendations.md", metavar="FILE")
 
     fl = sub.add_parser("flag", help="Flag photos for review and copy to to-review directory")
-    fl.add_argument("ids", nargs="+", metavar="ID")
+    fl.add_argument("ids", nargs="+", metavar="ID", type=int)
     fl.add_argument("--db", default="photos.db", metavar="DB")
     fl.add_argument("--clusters", default="clusters.json", metavar="FILE")
     fl.add_argument("--output-dir", default="output/to-review", metavar="DIR")
