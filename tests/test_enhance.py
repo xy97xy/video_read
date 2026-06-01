@@ -5,7 +5,7 @@ PROJ = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, PROJ)
 
 from PIL import Image
-from photos.enhance import enhance_photo
+from photos.enhance import enhance_photo, make_comparison
 
 
 def _make_image(width=100, height=80, color=(100, 100, 100)):
@@ -33,3 +33,18 @@ def test_enhance_photo_dark_brighter_than_standard():
     std_brightness = sum(standard.getpixel((50, 50)))
     dark_brightness = sum(dark.getpixel((50, 50)))
     assert dark_brightness > std_brightness
+
+
+def test_make_comparison_correct_width():
+    orig = _make_image(200, 150)
+    enh = _make_image(200, 150)
+    result = make_comparison(orig, enh)
+    # width = orig.width + 4px divider + enh.width
+    assert result.width == 200 + 4 + 200
+
+
+def test_make_comparison_correct_height():
+    orig = _make_image(200, 150)
+    enh = _make_image(200, 150)
+    result = make_comparison(orig, enh)
+    assert result.height == 150
