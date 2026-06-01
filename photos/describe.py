@@ -85,8 +85,10 @@ def _call_qwen(model, processor, messages: list[dict]) -> str:
     from qwen_vl_utils import process_vision_info
     text_input = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     image_inputs, video_inputs, video_kwargs = process_vision_info(messages, return_video_kwargs=True)
-    if isinstance(video_kwargs.get("fps"), list):
+    if isinstance(video_kwargs.get("fps"), list) and video_kwargs["fps"]:
         video_kwargs["fps"] = video_kwargs["fps"][0]
+    elif "fps" in video_kwargs and not video_kwargs["fps"]:
+        del video_kwargs["fps"]
     inputs = processor(
         text=[text_input], images=image_inputs, videos=video_inputs,
         return_tensors="pt", **video_kwargs,
@@ -110,18 +112,22 @@ def describe_photo(model, processor, path: Path) -> dict:
     tmp_name = None
     try:
         from PIL import Image
-        img_path = str(path)
         if path.suffix.lower() == ".heic":
             img = Image.open(path)
             tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
             tmp.close()
             img.save(tmp.name, "JPEG")
             tmp_name = tmp.name
-            img_path = tmp_name
+            img = Image.open(tmp_name)
+        else:
+            img = Image.open(path)
+        img = img.convert("RGB")
+        # Limit resolution to avoid VRAM OOM — same budget as the video pipeline
+        img.thumbnail((630, 630), Image.LANCZOS)
         messages = [{
             "role": "user",
             "content": [
-                {"type": "image", "image": img_path},
+                {"type": "image", "image": img, "max_pixels": 360 * 420},
                 {"type": "text", "text": _DESCRIBE_PROMPT},
             ],
         }]

@@ -368,11 +368,12 @@ def cmd_describe(args):
         model, processor = load_qwen()
         print(f"Model loaded in {time.time() - t0:.0f}s")
 
+        _VIDEO_EXTS = {'.mp4', '.mov', '.m4v', '.avi'}
         n_described = 0
         bar = tqdm(rows, unit="photo")
         for photo_id, photo_path in bar:
             p = Path(photo_path)
-            if not p.exists():
+            if not p.exists() or p.suffix.lower() in _VIDEO_EXTS:
                 continue
             bar.set_description(p.name[:40])
             result = describe_photo(model, processor, p)
