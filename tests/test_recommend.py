@@ -48,3 +48,79 @@ def test_flagged_defaults_to_zero(tmp_path):
     val = conn.execute("SELECT flagged FROM photos WHERE path='/a.jpg'").fetchone()[0]
     conn.close()
     assert val == 0
+
+
+from photos.recommend import auto_flag_quality
+
+
+def _make_conn(tmp_path, rows):
+    """rows: list of dicts. Required key: id. Optional: path, quality, scene,
+    caption, people, cluster_id, discarded, flagged."""
+    mod = _load_photos_module()
+    db = str(tmp_path / f"photos_{len(rows)}.db")
+    conn = mod._init_db(db)
+    for r in rows:
+        conn.execute(
+            "INSERT INTO photos "
+            "(id, path, quality, scene, caption, people, cluster_id, discarded, flagged) "
+            "VALUES (:id,:path,:quality,:scene,:caption,:people,:cluster_id,:discarded,:flagged)",
+            {
+                "id": r["id"],
+                "path": r.get("path", f"/fake/{r['id']}.jpg"),
+                "quality": r.get("quality"),
+                "scene": r.get("scene"),
+                "caption": r.get("caption"),
+                "people": r.get("people"),
+                "cluster_id": r.get("cluster_id"),
+                "discarded": r.get("discarded", 0),
+                "flagged": r.get("flagged", 0),
+            },
+        )
+    conn.commit()
+    return conn
+
+
+def test_auto_flag_quality_flags_non_good(tmp_path):
+    conn = _make_conn(tmp_path, [
+        {"id": 1, "quality": "blurry"},
+        {"id": 2, "quality": "dark"},
+        {"id": 3, "quality": "good"},
+    ])
+    n = auto_flag_quality(conn)
+    assert n == 2
+    flags = {r[0]: r[1] for r in conn.execute("SELECT id, flagged FROM photos")}
+    assert flags[1] == 1
+    assert flags[2] == 1
+    assert flags[3] == 0
+    conn.close()
+
+
+def test_auto_flag_quality_skips_discarded(tmp_path):
+    conn = _make_conn(tmp_path, [
+        {"id": 1, "quality": "blurry", "discarded": 1},
+    ])
+    n = auto_flag_quality(conn)
+    assert n == 0
+    conn.close()
+
+
+def test_auto_flag_quality_is_idempotent(tmp_path):
+    conn = _make_conn(tmp_path, [
+        {"id": 1, "quality": "blurry"},
+    ])
+    auto_flag_quality(conn)
+    n2 = auto_flag_quality(conn)
+    assert n2 == 0  # already flagged on first run
+    conn.close()
+
+
+def test_auto_flag_quality_all_quality_values(tmp_path):
+    conn = _make_conn(tmp_path, [
+        {"id": 1, "quality": "overexposed"},
+        {"id": 2, "quality": "obstructed"},
+        {"id": 3, "quality": "good"},
+        {"id": 4, "quality": None},  # null quality — not flagged
+    ])
+    n = auto_flag_quality(conn)
+    assert n == 2  # only overexposed and obstructed
+    conn.close()
