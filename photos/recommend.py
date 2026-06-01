@@ -2,7 +2,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, UTC
 from pathlib import Path
 
 
@@ -41,7 +41,7 @@ def build_report(
 
     lines = [
         "# Photo Recommendations",
-        f"Generated: {datetime.utcnow().strftime('%Y-%m-%d')}  |  {total} photos  |  {n_flagged} flagged",
+        f"Generated: {datetime.now(UTC).strftime('%Y-%m-%d')}  |  {total} photos  |  {n_flagged} flagged",
         "",
     ]
 

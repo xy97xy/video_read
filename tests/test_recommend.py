@@ -177,7 +177,7 @@ def test_build_report_excludes_discarded(tmp_path):
     build_report(conn, None, out)
     text = out.read_text()
 
-    assert "fake/2.jpg" not in text
+    assert "| 2 |" not in text
     conn.close()
 
 
