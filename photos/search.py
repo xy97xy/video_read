@@ -5,6 +5,8 @@ import sqlite3
 def build_fts(conn: sqlite3.Connection) -> None:
     """Rebuild the FTS5 full-text search index from described, non-discarded photos."""
     conn.execute("DROP TABLE IF EXISTS photos_fts")
+    # Standalone (not content='photos'): full rebuild on every call means no triggers
+    # needed and WHERE filtering during INSERT works without restriction.
     conn.execute("""
         CREATE VIRTUAL TABLE photos_fts USING fts5(
             caption, scene, people, place
