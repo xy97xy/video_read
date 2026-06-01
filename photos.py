@@ -485,6 +485,66 @@ def cmd_flag(args):
         conn.close()
 
 
+def cmd_search(args):
+    import sqlite3 as _sqlite3
+    from photos.search import build_fts, search_photos
+
+    conn = _init_db(args.db)
+    try:
+        n_described = conn.execute(
+            "SELECT COUNT(*) FROM photos WHERE described_at IS NOT NULL AND discarded=0"
+        ).fetchone()[0]
+        if n_described == 0:
+            print("⚠ No photos have been described yet. Run: python photos.py describe --db <db>")
+            return
+
+        build_fts(conn)
+
+        try:
+            results = search_photos(conn, args.query, args.limit)
+        except _sqlite3.OperationalError as e:
+            print(f"Search error: {e}")
+            print(f"  Query was: {args.query}")
+            return
+
+        if not results:
+            print(f'No photos found matching "{args.query}"')
+            return
+
+        print(f'Found {len(results)} photo(s) matching "{args.query}"\n')
+        header = f" {'id':>4} | {'score':>6} | {'file':<25} | {'scene':<18} | {'place':<15} | caption"
+        print(header)
+        print("-" * len(header))
+        for r in results:
+            fname = Path(r["path"]).name
+            print(
+                f" {r['id']:>4} | {r['score']:>6.2f} | {fname:<25} | "
+                f"{(r['scene'] or ''):<18} | {(r['place'] or ''):<15} | "
+                f"{(r['caption'] or '')[:60]}"
+            )
+
+        out = Path(args.output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        lines = [
+            f'# Search Results: "{args.query}"',
+            f"Generated: {datetime.now().strftime('%Y-%m-%d')}  |  {len(results)} results",
+            "",
+            "| id | score | file | scene | place | caption |",
+            "|----|-------|------|-------|-------|---------|",
+        ]
+        for r in results:
+            fname = Path(r["path"]).name
+            caption_short = (r["caption"] or "")[:80]
+            lines.append(
+                f"| {r['id']} | {r['score']:.2f} | {fname} | "
+                f"{r['scene'] or ''} | {r['place'] or ''} | {caption_short} |"
+            )
+        out.write_text("\n".join(lines))
+        print(f"\nSaved to {out}")
+    finally:
+        conn.close()
+
+
 def main():
     p = argparse.ArgumentParser(
         prog="photos.py",
@@ -531,11 +591,18 @@ def main():
     fl.add_argument("--output-dir", default="output/to-review", metavar="DIR")
     fl.add_argument("--unflag", action="store_true", help="Unflag photos and remove copies")
 
+    sr = sub.add_parser("search", help="Full-text search photos by description")
+    sr.add_argument("query", metavar="QUERY")
+    sr.add_argument("--db", default="photos.db", metavar="DB")
+    sr.add_argument("--limit", type=int, default=20, metavar="N")
+    sr.add_argument("--output", default="output/search-results.md", metavar="FILE")
+
     args = p.parse_args()
     {"scan": cmd_scan, "cluster": cmd_cluster,
      "review": cmd_review, "organize": cmd_organize,
      "dedup": cmd_dedup, "describe": cmd_describe,
-     "recommend": cmd_recommend, "flag": cmd_flag}[args.subcommand](args)
+     "recommend": cmd_recommend, "flag": cmd_flag,
+     "search": cmd_search}[args.subcommand](args)
 
 
 if __name__ == "__main__":
