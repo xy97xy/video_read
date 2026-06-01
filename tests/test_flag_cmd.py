@@ -76,7 +76,7 @@ def test_cmd_flag_copies_file_to_to_review(tmp_path):
 def test_cmd_flag_uses_cluster_name_as_subfolder(tmp_path):
     src = tmp_path / "a.jpg"
     src.write_bytes(b"photo")
-    clusters = [{"id": 1, "name": "Iceland-2024", "photo_ids": [1]}]
+    clusters = [{"id": 1, "name": "Iceland 2024", "photo_ids": [1]}]
     db, clusters_path = _make_db(
         tmp_path,
         [{"id": 1, "path": str(src), "cluster_id": 1}],
@@ -91,7 +91,7 @@ def test_cmd_flag_uses_cluster_name_as_subfolder(tmp_path):
     )
     mod.cmd_flag(args)
 
-    assert (out_dir / "Iceland-2024" / "a.jpg").exists()
+    assert (out_dir / "Iceland-2024" / "a.jpg").exists()  # _sanitize converts space to dash
 
 
 def test_cmd_flag_unclustered_goes_to_unclustered_folder(tmp_path):

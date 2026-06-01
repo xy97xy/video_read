@@ -397,6 +397,13 @@ def cmd_recommend(args):
 
     conn = _init_db(args.db)
     try:
+        n_described = conn.execute(
+            "SELECT COUNT(*) FROM photos WHERE described_at IS NOT NULL AND discarded=0"
+        ).fetchone()[0]
+        if n_described == 0:
+            print("⚠ No photos have been described yet. Run: python photos.py describe --db <db>")
+            return
+
         n = auto_flag_quality(conn)
         print(f"✓ Auto-flagged {n} photo(s) with non-good quality")
 
@@ -431,7 +438,8 @@ def cmd_flag(args):
                 if not row:
                     continue
                 src_path, cluster_id = row
-                cname = cluster_names.get(cluster_id, "unclustered") if cluster_id else "unclustered"
+                raw = cluster_names.get(cluster_id, "unclustered") if cluster_id else "unclustered"
+                cname = _sanitize(raw) if cluster_id else "unclustered"
                 cluster_dir = out / cname
                 fname = Path(src_path).name
                 for f in cluster_dir.rglob(fname):
@@ -456,7 +464,8 @@ def cmd_flag(args):
                 if not row:
                     continue
                 src, cluster_id = row
-                cname = cluster_names.get(cluster_id, "unclustered") if cluster_id else "unclustered"
+                raw = cluster_names.get(cluster_id, "unclustered") if cluster_id else "unclustered"
+                cname = _sanitize(raw) if cluster_id else "unclustered"
                 dest_dir = out / cname
                 dest_dir.mkdir(parents=True, exist_ok=True)
                 dest = _dest_path(dest_dir, Path(src).name)

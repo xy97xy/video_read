@@ -271,10 +271,10 @@ def test_cmd_recommend_auto_flags_and_writes_report(tmp_path):
     db = str(tmp_path / "photos.db")
     conn = mod._init_db(db)
     conn.execute(
-        "INSERT INTO photos (id, path, quality) VALUES (1, '/a.jpg', 'blurry')"
+        "INSERT INTO photos (id, path, quality, described_at) VALUES (1, '/a.jpg', 'blurry', 1)"
     )
     conn.execute(
-        "INSERT INTO photos (id, path, quality) VALUES (2, '/b.jpg', 'good')"
+        "INSERT INTO photos (id, path, quality, described_at) VALUES (2, '/b.jpg', 'good', 1)"
     )
     conn.commit()
     conn.close()
@@ -300,3 +300,25 @@ def test_cmd_recommend_auto_flags_and_writes_report(tmp_path):
     # report written
     assert out.exists()
     assert "🚩" in out.read_text()
+
+
+def test_cmd_recommend_warns_when_no_descriptions(tmp_path, capsys):
+    mod = _load_photos_module()
+    db = str(tmp_path / "photos.db")
+    conn = mod._init_db(db)
+    conn.execute("INSERT INTO photos (id, path, quality) VALUES (1, '/a.jpg', 'blurry')")
+    conn.commit()
+    conn.close()
+
+    import argparse
+    args = argparse.Namespace(
+        db=db,
+        clusters=str(tmp_path / "clusters.json"),
+        output=str(tmp_path / "recommendations.md"),
+    )
+    mod.cmd_recommend(args)
+
+    out = capsys.readouterr().out
+    assert "described" in out.lower()
+    # report should NOT be written when no descriptions exist
+    assert not (tmp_path / "recommendations.md").exists()
