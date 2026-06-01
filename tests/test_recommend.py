@@ -50,7 +50,7 @@ def test_flagged_defaults_to_zero(tmp_path):
     assert val == 0
 
 
-from photos.recommend import auto_flag_quality, build_report
+from photos.recommend import auto_flag_quality, build_report, set_flagged
 
 
 def _make_conn(tmp_path, rows):
@@ -200,4 +200,67 @@ def test_build_report_creates_parent_dirs(tmp_path):
     out = tmp_path / "nested" / "deep" / "recommendations.md"
     build_report(conn, None, out)
     assert out.exists()
+    conn.close()
+
+
+def test_set_flagged_flags_valid_ids(tmp_path):
+    conn = _make_conn(tmp_path, [
+        {"id": 1, "quality": "good"},
+        {"id": 2, "quality": "blurry"},
+    ])
+    result = set_flagged(conn, [1, 2], flag=True)
+
+    assert sorted(result["done"]) == [1, 2]
+    assert result["skipped"] == []
+    assert result["not_found"] == []
+    flags = {r[0]: r[1] for r in conn.execute("SELECT id, flagged FROM photos")}
+    assert flags[1] == 1
+    assert flags[2] == 1
+    conn.close()
+
+
+def test_set_flagged_skips_discarded(tmp_path):
+    conn = _make_conn(tmp_path, [
+        {"id": 1, "discarded": 1},
+    ])
+    result = set_flagged(conn, [1], flag=True)
+
+    assert result["skipped"] == [(1, "already discarded")]
+    assert result["done"] == []
+    flagged = conn.execute("SELECT flagged FROM photos WHERE id=1").fetchone()[0]
+    assert flagged == 0
+    conn.close()
+
+
+def test_set_flagged_not_found(tmp_path):
+    conn = _make_conn(tmp_path, [])
+    result = set_flagged(conn, [99], flag=True)
+
+    assert result["not_found"] == [99]
+    assert result["done"] == []
+    conn.close()
+
+
+def test_set_flagged_unflag_sets_zero(tmp_path):
+    conn = _make_conn(tmp_path, [
+        {"id": 1, "flagged": 1},
+    ])
+    result = set_flagged(conn, [1], flag=False)
+
+    assert result["done"] == [1]
+    flagged = conn.execute("SELECT flagged FROM photos WHERE id=1").fetchone()[0]
+    assert flagged == 0
+    conn.close()
+
+
+def test_set_flagged_mixed_ids(tmp_path):
+    conn = _make_conn(tmp_path, [
+        {"id": 1, "quality": "good"},
+        {"id": 2, "discarded": 1},
+    ])
+    result = set_flagged(conn, [1, 2, 99], flag=True)
+
+    assert result["done"] == [1]
+    assert result["skipped"] == [(2, "already discarded")]
+    assert result["not_found"] == [99]
     conn.close()

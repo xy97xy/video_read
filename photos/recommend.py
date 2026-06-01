@@ -73,3 +73,34 @@ def _append_table(lines: list[str], heading: str, photos: list) -> None:
             f"| {scene or ''} | {people or ''} | {caption_short} |"
         )
     lines.append("")
+
+
+def set_flagged(
+    conn: sqlite3.Connection,
+    ids: list[int],
+    flag: bool,
+) -> dict:
+    """Set flagged=1 or flagged=0 for given IDs.
+
+    Returns {"done": [...], "skipped": [(id, reason),...], "not_found": [...]}.
+    When flagging (flag=True), photos with discarded=1 are skipped.
+    """
+    done: list[int] = []
+    skipped: list[tuple[int, str]] = []
+    not_found: list[int] = []
+
+    for pid in ids:
+        row = conn.execute(
+            "SELECT discarded FROM photos WHERE id=?", (pid,)
+        ).fetchone()
+        if row is None:
+            not_found.append(pid)
+            continue
+        if flag and row[0]:
+            skipped.append((pid, "already discarded"))
+            continue
+        conn.execute("UPDATE photos SET flagged=? WHERE id=?", (int(flag), pid))
+        done.append(pid)
+
+    conn.commit()
+    return {"done": done, "skipped": skipped, "not_found": not_found}
