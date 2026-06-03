@@ -247,14 +247,18 @@ def cmd_organize(args):
         print(f"  {n_skipped} skipped (source file not found)")
 
 
+_VIDEO_EXTS = {'.mp4', '.mov', '.m4v', '.avi', '.mkv'}
+
+
 def cmd_dedup(args):
     conn = _init_db(args.db)
     try:
-        # Pass 1: exact duplicates
+        # Pass 1: exact duplicates (photos only)
         rows = conn.execute(
             "SELECT id, path, taken_at FROM photos WHERE discarded = 0"
         ).fetchall()
-        photos = [{"id": r[0], "path": r[1], "taken_at": r[2]} for r in rows]
+        photos = [{"id": r[0], "path": r[1], "taken_at": r[2]} for r in rows
+                  if Path(r[1]).suffix.lower() not in _VIDEO_EXTS]
 
         dup_groups = find_exact_duplicates(photos)
         n_auto = 0
@@ -271,11 +275,12 @@ def cmd_dedup(args):
         conn.commit()
         print(f"✓ Auto-discarded {n_auto} exact duplicate(s)")
 
-        # Pass 2: burst groups
+        # Pass 2: burst groups (photos only)
         rows = conn.execute(
             "SELECT id, path, taken_at FROM photos WHERE discarded = 0"
         ).fetchall()
-        photos = [{"id": r[0], "path": r[1], "taken_at": r[2]} for r in rows]
+        photos = [{"id": r[0], "path": r[1], "taken_at": r[2]} for r in rows
+                  if Path(r[1]).suffix.lower() not in _VIDEO_EXTS]
         burst_groups = find_burst_groups(photos, window_seconds=args.burst_window)
 
         def _file_size(p: dict) -> int:
