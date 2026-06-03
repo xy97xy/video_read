@@ -69,16 +69,15 @@ Then re-run `photos.py describe` — it will re-process that photo.
 python photos.py dedup --db output/photos.db --report output/burst-groups.json
 ```
 
-Python finds two types of groups and writes them all to `output/burst-groups.json`:
-- `"type": "exact_duplicate"` — identical bytes, different paths
-- `"type": "burst"` — photos taken within 3 seconds of each other
+Python handles two passes:
+- **Exact duplicates** — auto-discarded immediately, keeping whichever copy has been described by Qwen (falls back to lower ID). No judgment needed — identical bytes.
+- **Burst groups** — written to `output/burst-groups.json` for Claude to review
 
 **Claude reads the report and decides** which photo to keep in each group. All photos are already described by Qwen from Phase 2 — use captions, quality, and scene to make the call. Videos are never included.
 
 Key rules:
 - ⚠️ Any group with `"warning"` set (10+ photos) is a metadata artifact — Google Takeout sometimes stamps all `taken_at` with the scan date. **Skip these entirely** (omit from picks).
-- For exact duplicates: pick based on which path is more canonical (e.g. named folder over raw takeout path)
-- For burst shots: pick the sharpest / best composed based on caption and quality
+- For burst shots: pick the sharpest / best composed based on caption and quality. Look at actual image content — captions from Qwen are available for all photos.
 
 Build picks and apply:
 

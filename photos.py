@@ -295,30 +295,45 @@ def cmd_dedup(args):
                 "scene": scene,
             }
 
-        groups_out = []
-
-        # Pass 1: exact duplicates
+        # Pass 1: exact duplicates — auto-discard, keep the described copy (or lower ID)
         dup_groups = find_exact_duplicates(photos)
+        n_exact = 0
         for group in dup_groups:
-            photos_out = [_photo_info(p, "exact_duplicate") for p in group]
-            groups_out.append({"type": "exact_duplicate", "photos": photos_out})
+            described = [p for p in group if conn.execute(
+                "SELECT described_at FROM photos WHERE id=?", (p["id"],)
+            ).fetchone()[0]]
+            keep = described[0] if described else min(group, key=lambda p: p["id"])
+            keep_name = Path(keep["path"]).name
+            for p in group:
+                if p["id"] != keep["id"]:
+                    conn.execute(
+                        "UPDATE photos SET discarded=1, discard_reason=? WHERE id=?",
+                        (f"exact duplicate of {keep_name}", p["id"]),
+                    )
+                    n_exact += 1
+        conn.commit()
+        print(f"✓ Auto-discarded {n_exact} exact duplicate(s) (kept described copy)")
 
-        # Pass 2: burst groups
+        # Pass 2: burst groups — report for Claude to review
+        rows = conn.execute(
+            "SELECT id, path, taken_at FROM photos WHERE discarded = 0"
+        ).fetchall()
+        photos = [{"id": r[0], "path": r[1], "taken_at": r[2]} for r in rows
+                  if Path(r[1]).suffix.lower() not in _VIDEO_EXTS]
         burst_groups = find_burst_groups(photos, window_seconds=args.burst_window)
+
+        if not burst_groups:
+            print("✓ No burst groups found")
+            return
+
+        groups_out = []
         for group in burst_groups:
             photos_out = [_photo_info(p, "burst") for p in group]
             warning = len(group) >= 10
             groups_out.append({"type": "burst", "photos": photos_out,
                                 "warning": "large group — likely bad timestamps, consider skipping" if warning else None})
 
-        if not groups_out:
-            print("✓ No duplicates or burst groups found")
-            return
-
-        n_exact = sum(1 for g in groups_out if g["type"] == "exact_duplicate")
-        n_burst = sum(1 for g in groups_out if g["type"] == "burst")
-        print(f"Found {n_exact} exact duplicate group(s) and {n_burst} burst group(s).")
-        print("Claude should review and decide which to keep, then run --apply.")
+        print(f"Found {len(burst_groups)} burst group(s). Claude should review and run --apply.")
 
         report_path = Path(args.report)
         report_path.parent.mkdir(parents=True, exist_ok=True)
