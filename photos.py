@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from photos.metadata import find_media_files, extract_metadata, reverse_geocode
 from photos.cluster import build_clusters
-from photos.dedup import find_exact_duplicates, find_burst_groups
+from photos.dedup import find_exact_duplicates, find_phash_duplicates
 
 
 def _init_db(db_path: str) -> sqlite3.Connection:
@@ -250,59 +250,28 @@ def cmd_organize(args):
 _VIDEO_EXTS = {'.mp4', '.mov', '.m4v', '.avi', '.mkv'}
 
 
+def _dedup_keep(group: list[dict], conn) -> dict:
+    """Pick the copy to keep: prefer described, then lower ID."""
+    described = [p for p in group if conn.execute(
+        "SELECT described_at FROM photos WHERE id=?", (p["id"],)
+    ).fetchone()[0]]
+    return described[0] if described else min(group, key=lambda p: p["id"])
+
+
 def cmd_dedup(args):
     conn = _init_db(args.db)
     try:
-        if args.apply:
-            picks = json.loads(Path(args.apply).read_text())
-            n_discarded = 0
-            for group_pick in picks:
-                keep_name = group_pick["keep_name"]
-                group_type = group_pick.get("type", "burst")
-                reason = (f"exact duplicate of {keep_name}" if group_type == "exact_duplicate"
-                          else f"burst shot (kept {keep_name})")
-                for pid in group_pick["discard_ids"]:
-                    conn.execute(
-                        "UPDATE photos SET discarded=1, discard_reason=? WHERE id=?",
-                        (reason, pid),
-                    )
-                    n_discarded += 1
-            conn.commit()
-            print(f"✓ Applied picks: {n_discarded} photo(s) discarded across {len(picks)} group(s)")
-            return
-
         rows = conn.execute(
             "SELECT id, path, taken_at FROM photos WHERE discarded = 0"
         ).fetchall()
         photos = [{"id": r[0], "path": r[1], "taken_at": r[2]} for r in rows
                   if Path(r[1]).suffix.lower() not in _VIDEO_EXTS]
 
-        def _photo_info(p: dict, group_type: str) -> dict:
-            row = conn.execute(
-                "SELECT caption, quality, scene FROM photos WHERE id=?", (p["id"],)
-            ).fetchone()
-            size_mb = Path(p["path"]).stat().st_size / 1_048_576 if Path(p["path"]).exists() else 0
-            dt_str = datetime.fromtimestamp(p["taken_at"]).strftime("%Y-%m-%d %H:%M:%S") if p["taken_at"] else ""
-            caption, quality, scene = row if row else (None, None, None)
-            return {
-                "id": p["id"],
-                "filename": Path(p["path"]).name,
-                "path": p["path"],
-                "size_mb": round(size_mb, 1),
-                "taken_at": dt_str,
-                "caption": caption,
-                "quality": quality,
-                "scene": scene,
-            }
-
-        # Pass 1: exact duplicates — auto-discard, keep the described copy (or lower ID)
+        # Pass 1: byte-identical duplicates
         dup_groups = find_exact_duplicates(photos)
         n_exact = 0
         for group in dup_groups:
-            described = [p for p in group if conn.execute(
-                "SELECT described_at FROM photos WHERE id=?", (p["id"],)
-            ).fetchone()[0]]
-            keep = described[0] if described else min(group, key=lambda p: p["id"])
+            keep = _dedup_keep(group, conn)
             keep_name = Path(keep["path"]).name
             for p in group:
                 if p["id"] != keep["id"]:
@@ -312,35 +281,30 @@ def cmd_dedup(args):
                     )
                     n_exact += 1
         conn.commit()
-        print(f"✓ Auto-discarded {n_exact} exact duplicate(s) (kept described copy)")
+        print(f"✓ Pass 1: auto-discarded {n_exact} byte-identical duplicate(s)")
 
-        # Pass 2: burst groups — report for Claude to review
+        # Pass 2: visually identical (pHash distance = 0)
         rows = conn.execute(
             "SELECT id, path, taken_at FROM photos WHERE discarded = 0"
         ).fetchall()
         photos = [{"id": r[0], "path": r[1], "taken_at": r[2]} for r in rows
                   if Path(r[1]).suffix.lower() not in _VIDEO_EXTS]
-        burst_groups = find_burst_groups(photos, window_seconds=args.burst_window)
-
-        if not burst_groups:
-            print("✓ No burst groups found")
-            return
-
-        groups_out = []
-        for group in burst_groups:
-            photos_out = [_photo_info(p, "burst") for p in group]
-            warning = len(group) >= 10
-            groups_out.append({"type": "burst", "photos": photos_out,
-                                "warning": "large group — likely bad timestamps, consider skipping" if warning else None})
-
-        print(f"Found {len(burst_groups)} burst group(s). Claude should review and run --apply.")
-
-        report_path = Path(args.report)
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(json.dumps(groups_out, indent=2, ensure_ascii=False))
-        print(f"✓ Report written to {report_path}")
-        print(f"\n  picks.json format: [{{'keep_id': 5, 'keep_name': 'IMG_1234.jpg', 'discard_ids': [6, 7]}}]")
-        print(f"  Then run: python photos.py dedup --apply <picks.json>")
+        print(f"Computing pHash for {len(photos)} photos...")
+        phash_groups = find_phash_duplicates(photos)
+        n_phash = 0
+        for group in phash_groups:
+            keep = _dedup_keep(group, conn)
+            keep_name = Path(keep["path"]).name
+            for p in group:
+                if p["id"] != keep["id"]:
+                    conn.execute(
+                        "UPDATE photos SET discarded=1, discard_reason=? WHERE id=?",
+                        (f"visually identical to {keep_name}", p["id"]),
+                    )
+                    n_phash += 1
+        conn.commit()
+        print(f"✓ Pass 2: auto-discarded {n_phash} visually identical duplicate(s)")
+        print(f"  Remaining photos: Qwen + Claude handle quality decisions")
     finally:
         conn.close()
 
@@ -663,13 +627,8 @@ def main():
     o.add_argument("--db", default="photos.db", metavar="DB")
     o.add_argument("--clusters", default="clusters.json", metavar="FILE")
 
-    d = sub.add_parser("dedup", help="Find exact duplicates + report burst groups for Claude to review")
+    d = sub.add_parser("dedup", help="Auto-discard byte-identical and visually identical duplicates")
     d.add_argument("--db", default="photos.db", metavar="DB")
-    d.add_argument("--burst-window", type=int, default=3, metavar="SEC")
-    d.add_argument("--report", default="output/burst-groups.json", metavar="FILE",
-                   help="Where to write burst group report (default: output/burst-groups.json)")
-    d.add_argument("--apply", default=None, metavar="FILE",
-                   help="Apply Claude's picks from a JSON file")
 
     desc = sub.add_parser("describe", help="Describe photos with Qwen2.5-VL → store in DB")
     desc.add_argument("--db", default="photos.db", metavar="DB")
