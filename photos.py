@@ -95,6 +95,14 @@ def cmd_scan(args):
 
 
 def cmd_cluster(args):
+    clusters_path = Path(args.clusters)
+    if clusters_path.exists() and not getattr(args, "force", False):
+        existing = json.loads(clusters_path.read_text())
+        confirmed_trips = [c for c in existing if c.get("is_trip") and c.get("confirmed")]
+        if confirmed_trips:
+            print(f"⚠ {clusters_path} has {len(confirmed_trips)} confirmed trip(s). Use --force to overwrite.")
+            return
+
     conn = sqlite3.connect(args.db)
     rows = conn.execute(
         "SELECT id, path, taken_at, lat, lon, place FROM photos"
@@ -630,6 +638,7 @@ def main():
     c.add_argument("--clusters", default="clusters.json", metavar="FILE")
     c.add_argument("--gap-days", type=int, default=3, metavar="N")
     c.add_argument("--radius-km", type=float, default=50.0, metavar="KM")
+    c.add_argument("--force", action="store_true", help="Overwrite existing confirmed clusters")
 
     r = sub.add_parser("review", help="Interactively review trip clusters")
     r.add_argument("--clusters", default="clusters.json", metavar="FILE")
