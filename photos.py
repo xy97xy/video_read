@@ -558,10 +558,16 @@ def cmd_enhance(args):
 
     _VIDEO_EXTS = {'.mp4', '.mov', '.m4v', '.avi'}
 
+    cluster_names: dict[int, str] = {}
+    clusters_path = Path(args.clusters)
+    if clusters_path.exists():
+        for c in json.loads(clusters_path.read_text()):
+            cluster_names[c["id"]] = c["name"]
+
     conn = _init_db(args.db)
     try:
         rows = conn.execute(
-            "SELECT id, path, quality FROM photos "
+            "SELECT id, path, quality, cluster_id FROM photos "
             "WHERE discarded=0 AND described_at IS NOT NULL AND flagged=0"
         ).fetchall()
 
@@ -569,17 +575,23 @@ def cmd_enhance(args):
             print("⚠ No photos have been described yet. Run: python photos.py describe --db <db>")
             return
 
+        out_base = Path(args.output_dir)
         n_enhanced = n_skipped = 0
         bar = tqdm(rows, unit="photo")
-        for _photo_id, photo_path, quality in bar:
+        for _photo_id, photo_path, quality, cluster_id in bar:
             p = Path(photo_path)
             bar.set_description(p.name[:40])
             if not p.exists() or p.suffix.lower() in _VIDEO_EXTS:
                 n_skipped += 1
                 continue
 
-            enhanced_path = p.parent / f"{p.stem}_enhanced.jpg"
-            compare_path = p.parent / f"{p.stem}_compare.jpg"
+            raw = cluster_names.get(cluster_id, "unclustered") if cluster_id else "unclustered"
+            cname = _sanitize(raw) if cluster_id else "unclustered"
+            dest_dir = out_base / cname
+            dest_dir.mkdir(parents=True, exist_ok=True)
+
+            enhanced_path = dest_dir / f"{p.stem}_enhanced.jpg"
+            compare_path = dest_dir / f"{p.stem}_compare.jpg"
 
             if not args.force and enhanced_path.exists() and compare_path.exists():
                 n_skipped += 1
@@ -597,6 +609,7 @@ def cmd_enhance(args):
                 n_skipped += 1
 
         print(f"\n✓ Enhanced {n_enhanced} photo(s), {n_skipped} skipped")
+        print(f"  Saved to {out_base}/")
     finally:
         conn.close()
 
@@ -654,6 +667,8 @@ def main():
 
     en = sub.add_parser("enhance", help="Apply color correction to all described photos")
     en.add_argument("--db", default="photos.db", metavar="DB")
+    en.add_argument("--clusters", default="clusters.json", metavar="FILE")
+    en.add_argument("--output-dir", default="output/enhanced", metavar="DIR")
     en.add_argument("--force", action="store_true", help="Re-enhance already-enhanced photos")
 
     ex = sub.add_parser("export-discarded", help="Copy discarded photos to a folder with manifest.csv")
