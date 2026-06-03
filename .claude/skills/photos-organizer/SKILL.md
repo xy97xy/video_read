@@ -61,17 +61,40 @@ Then re-run `photos.py describe` — it will re-process that photo.
 
 ---
 
-## Phase 3: Dedup + copy discards
+## Phase 3: Dedup
 
 ```bash
-yes k | python photos.py dedup --db output/photos.db
+python photos.py dedup --db output/photos.db --report output/burst-groups.json
 ```
 
-Auto-accepts the largest file per burst group (`k` = keep recommended). Report: exact duplicates discarded, burst groups thinned.
+Python handles two passes:
+- **Exact duplicates** — auto-discarded silently (identical bytes, no decision needed)
+- **Burst groups** — written to `output/burst-groups.json` for Claude to review
 
-⚠️ If a burst group has 20+ photos, it may be a metadata artifact (Google Takeout sometimes sets all `taken_at` to the scan date). Flag this to the user.
+Report: how many exact duplicates were discarded, how many burst groups need review.
 
-Then copy all discarded photos to `output/to-delete/` with a `manifest.csv` explaining why each was discarded:
+⚠️ Any group with 10+ photos is likely a metadata artifact (Google Takeout sometimes sets all `taken_at` to the scan date rather than the real shot time). Skip those groups entirely.
+
+**Claude reviews burst groups:** Read `output/burst-groups.json`. For each group, look at the captions, quality, and scene — pick the best photo to keep. All photos should already be described by Qwen from Phase 2.
+
+Build a picks list and apply:
+
+```python
+import json
+picks = [
+    # {"keep_id": <id>, "keep_name": "<filename>", "discard_ids": [<id>, ...]},
+    # one entry per burst group where you want to discard the others
+    # omit groups where all photos should be kept (no burst)
+]
+with open("output/burst-picks.json", "w") as f:
+    json.dump(picks, f, indent=2)
+```
+
+```bash
+python photos.py dedup --apply output/burst-picks.json
+```
+
+Then copy discarded photos to `output/to-delete/` with a manifest:
 
 ```bash
 python photos.py export-discarded --db output/photos.db --output-dir output/to-delete

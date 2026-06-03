@@ -253,7 +253,24 @@ _VIDEO_EXTS = {'.mp4', '.mov', '.m4v', '.avi', '.mkv'}
 def cmd_dedup(args):
     conn = _init_db(args.db)
     try:
-        # Pass 1: exact duplicates (photos only)
+        if args.apply:
+            # Apply Claude's picks from a JSON file
+            picks = json.loads(Path(args.apply).read_text())
+            n_discarded = 0
+            for group_pick in picks:
+                keep_id = group_pick["keep_id"]
+                keep_name = group_pick["keep_name"]
+                for pid in group_pick["discard_ids"]:
+                    conn.execute(
+                        "UPDATE photos SET discarded=1, discard_reason=? WHERE id=?",
+                        (f"burst shot (kept {keep_name})", pid),
+                    )
+                    n_discarded += 1
+            conn.commit()
+            print(f"✓ Applied picks: {n_discarded} photo(s) discarded across {len(picks)} burst group(s)")
+            return
+
+        # Pass 1: exact duplicates (photos only) — no decision needed, identical bytes
         rows = conn.execute(
             "SELECT id, path, taken_at FROM photos WHERE discarded = 0"
         ).fetchall()
@@ -273,9 +290,9 @@ def cmd_dedup(args):
                     )
                     n_auto += 1
         conn.commit()
-        print(f"✓ Auto-discarded {n_auto} exact duplicate(s)")
+        print(f"✓ Auto-discarded {n_auto} exact duplicate(s) (identical bytes — no decision needed)")
 
-        # Pass 2: burst groups (photos only)
+        # Pass 2: burst groups — report for Claude to review
         rows = conn.execute(
             "SELECT id, path, taken_at FROM photos WHERE discarded = 0"
         ).fetchall()
@@ -283,86 +300,49 @@ def cmd_dedup(args):
                   if Path(r[1]).suffix.lower() not in _VIDEO_EXTS]
         burst_groups = find_burst_groups(photos, window_seconds=args.burst_window)
 
-        def _file_size(p: dict) -> int:
-            try:
-                return Path(p["path"]).stat().st_size
-            except OSError:
-                return 0
+        if not burst_groups:
+            print("✓ No burst groups found")
+            return
 
-        n_kept = n_discarded_burst = 0
-        for group in burst_groups:
-            recommended = max(group, key=_file_size)
-
-            print(f"\nBurst group ({len(group)} photos):")
-            for i, p in enumerate(group, 1):
-                size_mb = _file_size(p) / 1_048_576
-                dt_str = (
-                    datetime.fromtimestamp(p["taken_at"]).strftime("%Y-%m-%d %H:%M:%S")
-                    if p["taken_at"] else ""
-                )
-                arrow = "  ← recommended" if p["id"] == recommended["id"] else ""
-                caption = conn.execute(
-                    "SELECT caption FROM photos WHERE id=?", (p["id"],)
+        groups_out = []
+        print(f"\n{len(burst_groups)} burst group(s) found. Claude should review and run --apply.\n")
+        for i, group in enumerate(burst_groups):
+            print(f"=== Group {i + 1} ({len(group)} photos) ===")
+            if len(group) >= 10:
+                print("  ⚠️  Large group — likely a metadata artifact (bad timestamps). Skip this group.")
+            photos_out = []
+            for p in group:
+                row = conn.execute(
+                    "SELECT caption, quality, scene FROM photos WHERE id=?", (p["id"],)
                 ).fetchone()
-                caption_str = f"\n       {caption[0][:80]}" if caption and caption[0] else ""
-                print(f"  {i}. {Path(p['path']).name}  {size_mb:.1f} MB  {dt_str}{arrow}{caption_str}")
-            print("Actions: [k]eep recommended  [p]ick different  [s]kip  [?]help")
+                size_mb = Path(p["path"]).stat().st_size / 1_048_576 if Path(p["path"]).exists() else 0
+                dt_str = datetime.fromtimestamp(p["taken_at"]).strftime("%Y-%m-%d %H:%M:%S") if p["taken_at"] else ""
+                caption, quality, scene = row if row else (None, None, None)
+                if not caption:
+                    print(f"  ⚠️  id={p['id']} {Path(p['path']).name} has no description — run describe first")
+                print(f"  id={p['id']}  {Path(p['path']).name}  {size_mb:.1f}MB  {dt_str}")
+                print(f"    quality={quality}  scene={scene}")
+                if caption:
+                    print(f"    {caption[:100]}")
+                photos_out.append({
+                    "id": p["id"],
+                    "filename": Path(p["path"]).name,
+                    "size_mb": round(size_mb, 1),
+                    "taken_at": dt_str,
+                    "caption": caption,
+                    "quality": quality,
+                    "scene": scene,
+                })
+            groups_out.append({"group": i + 1, "photos": photos_out})
+            print()
 
-            while True:
-                try:
-                    action = input("> ").strip().lower()
-                except EOFError:
-                    print("\nAborted.")
-                    return
-
-                if action == "k":
-                    for p in group:
-                        if p["id"] != recommended["id"]:
-                            conn.execute(
-                                "UPDATE photos SET discarded=1, discard_reason=? WHERE id=?",
-                                (f"burst shot (kept {Path(recommended['path']).name})", p["id"]),
-                            )
-                            n_discarded_burst += 1
-                    conn.commit()
-                    n_kept += 1
-                    break
-                elif action == "p":
-                    while True:
-                        try:
-                            choice_str = input(f"  Keep which? (1-{len(group)}): ").strip()
-                        except EOFError:
-                            print("\nAborted.")
-                            return
-                        try:
-                            idx = int(choice_str) - 1
-                            if 0 <= idx < len(group):
-                                chosen = group[idx]
-                                for p in group:
-                                    if p["id"] != chosen["id"]:
-                                        conn.execute(
-                                            "UPDATE photos SET discarded=1, discard_reason=? WHERE id=?",
-                                            (f"burst shot (kept {Path(chosen['path']).name})", p["id"]),
-                                        )
-                                        n_discarded_burst += 1
-                                conn.commit()
-                                n_kept += 1
-                                break
-                            else:
-                                print(f"  Invalid. Enter 1–{len(group)}.")
-                        except ValueError:
-                            print(f"  Invalid. Enter 1–{len(group)}.")
-                    break
-                elif action == "s":
-                    break
-                elif action == "?":
-                    print("  k = keep recommended (largest file), discard others")
-                    print("  p = pick a different photo to keep")
-                    print("  s = skip this group (keep all)")
-                    print("  ? = show this help")
-                else:
-                    print("  Unknown action. Type ? for help.")
-
-        print(f"\n✓ Kept {n_kept}, discarded {n_discarded_burst} across {len(burst_groups)} burst group(s)")
+        report_path = Path(args.report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(groups_out, indent=2, ensure_ascii=False))
+        print(f"✓ Report written to {report_path}")
+        print(f"  Review it, pick the keeper per group, then run:")
+        print(f"  python photos.py dedup --apply <picks.json>")
+        print(f"\n  picks.json format: [{{'keep_id': 5, 'keep_name': 'IMG_1234.jpg', 'discard_ids': [6, 7]}}]")
     finally:
         conn.close()
 
@@ -685,9 +665,13 @@ def main():
     o.add_argument("--db", default="photos.db", metavar="DB")
     o.add_argument("--clusters", default="clusters.json", metavar="FILE")
 
-    d = sub.add_parser("dedup", help="Remove exact duplicates and thin burst shots")
+    d = sub.add_parser("dedup", help="Find exact duplicates + report burst groups for Claude to review")
     d.add_argument("--db", default="photos.db", metavar="DB")
     d.add_argument("--burst-window", type=int, default=3, metavar="SEC")
+    d.add_argument("--report", default="output/burst-groups.json", metavar="FILE",
+                   help="Where to write burst group report (default: output/burst-groups.json)")
+    d.add_argument("--apply", default=None, metavar="FILE",
+                   help="Apply Claude's picks from a JSON file")
 
     desc = sub.add_parser("describe", help="Describe photos with Qwen2.5-VL → store in DB")
     desc.add_argument("--db", default="photos.db", metavar="DB")
