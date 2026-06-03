@@ -71,35 +71,10 @@ Auto-accepts the largest file per burst group (`k` = keep recommended). Report: 
 
 ⚠️ If a burst group has 20+ photos, it may be a metadata artifact (Google Takeout sometimes sets all `taken_at` to the scan date). Flag this to the user.
 
-Then copy all discarded photos to `output/to-delete/` for user review before permanent deletion:
+Then copy all discarded photos to `output/to-delete/` with a `manifest.csv` explaining why each was discarded:
 
-Run with: `python` (venv already activated from Phase 1)
-
-```python
-import sqlite3, shutil
-from pathlib import Path
-
-conn = sqlite3.connect('output/photos.db')
-rows = conn.execute('SELECT path FROM photos WHERE discarded=1').fetchall()
-out = Path('output/to-delete')
-out.mkdir(exist_ok=True)
-copied = 0
-for (path,) in rows:
-    src = Path(path)
-    if not src.exists():
-        continue
-    dest = out / src.name
-    if dest.exists():
-        counter = 1
-        while True:
-            candidate = out / f'{src.stem}_{counter}{src.suffix}'
-            if not candidate.exists():
-                dest = candidate
-                break
-            counter += 1
-    shutil.copy2(src, dest)
-    copied += 1
-print(f'Copied {copied} to output/to-delete/')
+```bash
+python photos.py export-discarded --db output/photos.db --output-dir output/to-delete
 ```
 
 Originals remain untouched in the Takeout directory. Then proceed.

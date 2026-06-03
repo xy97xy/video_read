@@ -45,6 +45,7 @@ def _init_db(db_path: str) -> sqlite3.Connection:
         ("people",       "ALTER TABLE photos ADD COLUMN people       TEXT"),
         ("described_at", "ALTER TABLE photos ADD COLUMN described_at INTEGER"),
         ("flagged",      "ALTER TABLE photos ADD COLUMN flagged      INTEGER DEFAULT 0"),
+        ("discard_reason", "ALTER TABLE photos ADD COLUMN discard_reason TEXT"),
     ]
     for col, sql in migrations:
         if col not in cols:
@@ -259,9 +260,13 @@ def cmd_dedup(args):
         n_auto = 0
         for group in dup_groups:
             keep_id = min(p["id"] for p in group)
+            keep_path = next(p["path"] for p in group if p["id"] == keep_id)
             for p in group:
                 if p["id"] != keep_id:
-                    conn.execute("UPDATE photos SET discarded=1 WHERE id=?", (p["id"],))
+                    conn.execute(
+                        "UPDATE photos SET discarded=1, discard_reason=? WHERE id=?",
+                        (f"exact duplicate of {Path(keep_path).name}", p["id"]),
+                    )
                     n_auto += 1
         conn.commit()
         print(f"✓ Auto-discarded {n_auto} exact duplicate(s)")
@@ -304,7 +309,10 @@ def cmd_dedup(args):
                 if action == "k":
                     for p in group:
                         if p["id"] != recommended["id"]:
-                            conn.execute("UPDATE photos SET discarded=1 WHERE id=?", (p["id"],))
+                            conn.execute(
+                                "UPDATE photos SET discarded=1, discard_reason=? WHERE id=?",
+                                (f"burst shot (kept {Path(recommended['path']).name})", p["id"]),
+                            )
                             n_discarded_burst += 1
                     conn.commit()
                     n_kept += 1
@@ -322,7 +330,10 @@ def cmd_dedup(args):
                                 chosen = group[idx]
                                 for p in group:
                                     if p["id"] != chosen["id"]:
-                                        conn.execute("UPDATE photos SET discarded=1 WHERE id=?", (p["id"],))
+                                        conn.execute(
+                                            "UPDATE photos SET discarded=1, discard_reason=? WHERE id=?",
+                                            (f"burst shot (kept {Path(chosen['path']).name})", p["id"]),
+                                        )
                                         n_discarded_burst += 1
                                 conn.commit()
                                 n_kept += 1
@@ -545,6 +556,51 @@ def cmd_search(args):
         conn.close()
 
 
+def cmd_export_discarded(args):
+    import csv
+    conn = _init_db(args.db)
+    try:
+        rows = conn.execute(
+            "SELECT path, discard_reason FROM photos WHERE discarded=1"
+        ).fetchall()
+        if not rows:
+            print("No discarded photos.")
+            return
+
+        out = Path(args.output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+
+        copied = missing = 0
+        for path, _ in rows:
+            src = Path(path)
+            if not src.exists():
+                missing += 1
+                continue
+            dest = out / src.name
+            if dest.exists():
+                counter = 1
+                while True:
+                    candidate = out / f"{src.stem}_{counter}{src.suffix}"
+                    if not candidate.exists():
+                        dest = candidate
+                        break
+                    counter += 1
+            shutil.copy2(src, dest)
+            copied += 1
+
+        manifest = out / "manifest.csv"
+        with open(manifest, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["filename", "reason"])
+            for path, reason in rows:
+                w.writerow([Path(path).name, reason or "unknown"])
+
+        print(f"✓ Copied {copied} discarded photo(s) to {out}/ ({missing} not found)")
+        print(f"✓ Manifest written to {manifest}")
+    finally:
+        conn.close()
+
+
 def cmd_enhance(args):
     from photos.enhance import enhance_photo, make_comparison
     from PIL import Image as _Image
@@ -650,12 +706,17 @@ def main():
     en.add_argument("--db", default="photos.db", metavar="DB")
     en.add_argument("--force", action="store_true", help="Re-enhance already-enhanced photos")
 
+    ex = sub.add_parser("export-discarded", help="Copy discarded photos to a folder with manifest.csv")
+    ex.add_argument("--db", default="photos.db", metavar="DB")
+    ex.add_argument("--output-dir", default="output/to-delete", metavar="DIR")
+
     args = p.parse_args()
     {"scan": cmd_scan, "cluster": cmd_cluster,
      "review": cmd_review, "organize": cmd_organize,
      "dedup": cmd_dedup, "describe": cmd_describe,
      "recommend": cmd_recommend, "flag": cmd_flag,
-     "search": cmd_search, "enhance": cmd_enhance}[args.subcommand](args)
+     "search": cmd_search, "enhance": cmd_enhance,
+     "export-discarded": cmd_export_discarded}[args.subcommand](args)
 
 
 if __name__ == "__main__":
