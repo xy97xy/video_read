@@ -301,7 +301,11 @@ def cmd_dedup(args):
                     if p["taken_at"] else ""
                 )
                 arrow = "  ← recommended" if p["id"] == recommended["id"] else ""
-                print(f"  {i}. {Path(p['path']).name}  {size_mb:.1f} MB  {dt_str}{arrow}")
+                caption = conn.execute(
+                    "SELECT caption FROM photos WHERE id=?", (p["id"],)
+                ).fetchone()
+                caption_str = f"\n       {caption[0][:80]}" if caption and caption[0] else ""
+                print(f"  {i}. {Path(p['path']).name}  {size_mb:.1f} MB  {dt_str}{arrow}{caption_str}")
             print("Actions: [k]eep recommended  [p]ick different  [s]kip  [?]help")
 
             while True:
