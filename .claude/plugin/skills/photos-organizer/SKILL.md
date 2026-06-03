@@ -120,11 +120,12 @@ If 0 trip clusters are found, all photos may be near the detected home location,
 
 ## Phase 5: Claude names clusters
 
-Read captions and scenes from the DB for each trip cluster:
+Read album names, captions and scenes from the DB for each trip cluster:
 
 ```python
 import sqlite3, json
 from pathlib import Path
+from collections import Counter
 
 conn = sqlite3.connect('output/photos.db')
 clusters = json.loads(Path('output/clusters.json').read_text())
@@ -135,18 +136,33 @@ for c in clusters:
     ids = c['photo_ids']
     placeholders = ','.join('?' * len(ids))
     rows = conn.execute(f'''
-        SELECT caption, scene, people FROM photos
-        WHERE id IN ({placeholders}) AND discarded=0 AND described_at IS NOT NULL
+        SELECT path, caption, scene, people FROM photos
+        WHERE id IN ({placeholders}) AND discarded=0
     ''', ids).fetchall()
+
+    # Extract Google Photos album names from paths
+    albums = []
+    for path, *_ in rows:
+        parts = Path(path).parts
+        try:
+            gp_idx = parts.index('Google Photos')
+            album = parts[gp_idx + 1]
+            if not album.startswith('Photos from'):
+                albums.append(album)
+        except (ValueError, IndexError):
+            pass
+    top_albums = [a for a, _ in Counter(albums).most_common(3)]
+
     print(f"=== Cluster {c['id']}: {c['name']} ===")
-    for caption, scene, people in rows[:8]:
-        print(f'  scene={scene} | people={people}')
+    if top_albums:
+        print(f"  albums: {', '.join(top_albums)}")
+    for _, caption, scene, people in rows[:6]:
         if caption:
-            print(f'  caption: {caption[:100]}')
+            print(f'  scene={scene} | {caption[:100]}')
     print()
 ```
 
-Based on the output, assign a descriptive name to each trip cluster. Examples: "China Trip", "Canada Ski Trip", "Joshua Tree Desert", "New York City". Clusters with no usable descriptions keep their date-range name.
+Use **album names first** — they're user-created and most reliable (e.g. `China-10-18-24` → "China Trip", `Whistler` → "Whistler Ski Trip"). Fall back to Qwen captions and scenes when albums are generic (`Photos from YYYY`) or absent. Clusters with no usable signal keep their date-range name.
 
 Show the user a table of proposed names and wait for confirmation:
 
