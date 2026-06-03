@@ -63,28 +63,31 @@ Then re-run `photos.py describe` — it will re-process that photo.
 
 ## Phase 3: Dedup
 
+**Python finds, Claude decides. No auto-discards.**
+
 ```bash
 python photos.py dedup --db output/photos.db --report output/burst-groups.json
 ```
 
-Python handles two passes:
-- **Exact duplicates** — auto-discarded silently (identical bytes, no decision needed)
-- **Burst groups** — written to `output/burst-groups.json` for Claude to review
+Python finds two types of groups and writes them all to `output/burst-groups.json`:
+- `"type": "exact_duplicate"` — identical bytes, different paths
+- `"type": "burst"` — photos taken within 3 seconds of each other
 
-Report: how many exact duplicates were discarded, how many burst groups need review.
+**Claude reads the report and decides** which photo to keep in each group. All photos are already described by Qwen from Phase 2 — use captions, quality, and scene to make the call. Videos are never included.
 
-⚠️ Any group with 10+ photos is likely a metadata artifact (Google Takeout sometimes sets all `taken_at` to the scan date rather than the real shot time). Skip those groups entirely.
+Key rules:
+- ⚠️ Any group with `"warning"` set (10+ photos) is a metadata artifact — Google Takeout sometimes stamps all `taken_at` with the scan date. **Skip these entirely** (omit from picks).
+- For exact duplicates: pick based on which path is more canonical (e.g. named folder over raw takeout path)
+- For burst shots: pick the sharpest / best composed based on caption and quality
 
-**Claude reviews burst groups:** Read `output/burst-groups.json`. For each group, look at the captions, quality, and scene — pick the best photo to keep. All photos should already be described by Qwen from Phase 2.
-
-Build a picks list and apply:
+Build picks and apply:
 
 ```python
 import json
 picks = [
-    # {"keep_id": <id>, "keep_name": "<filename>", "discard_ids": [<id>, ...]},
-    # one entry per burst group where you want to discard the others
-    # omit groups where all photos should be kept (no burst)
+    {"type": "exact_duplicate", "keep_id": <id>, "keep_name": "<filename>", "discard_ids": [<id>, ...]},
+    {"type": "burst", "keep_id": <id>, "keep_name": "<filename>", "discard_ids": [<id>, ...]},
+    # one entry per group — omit groups where all photos should be kept
 ]
 with open("output/burst-picks.json", "w") as f:
     json.dump(picks, f, indent=2)
