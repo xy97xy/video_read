@@ -254,95 +254,78 @@ def cmd_dedup(args):
     conn = _init_db(args.db)
     try:
         if args.apply:
-            # Apply Claude's picks from a JSON file
             picks = json.loads(Path(args.apply).read_text())
             n_discarded = 0
             for group_pick in picks:
-                keep_id = group_pick["keep_id"]
                 keep_name = group_pick["keep_name"]
+                group_type = group_pick.get("type", "burst")
+                reason = (f"exact duplicate of {keep_name}" if group_type == "exact_duplicate"
+                          else f"burst shot (kept {keep_name})")
                 for pid in group_pick["discard_ids"]:
                     conn.execute(
                         "UPDATE photos SET discarded=1, discard_reason=? WHERE id=?",
-                        (f"burst shot (kept {keep_name})", pid),
+                        (reason, pid),
                     )
                     n_discarded += 1
             conn.commit()
-            print(f"✓ Applied picks: {n_discarded} photo(s) discarded across {len(picks)} burst group(s)")
+            print(f"✓ Applied picks: {n_discarded} photo(s) discarded across {len(picks)} group(s)")
             return
 
-        # Pass 1: exact duplicates (photos only) — no decision needed, identical bytes
         rows = conn.execute(
             "SELECT id, path, taken_at FROM photos WHERE discarded = 0"
         ).fetchall()
         photos = [{"id": r[0], "path": r[1], "taken_at": r[2]} for r in rows
                   if Path(r[1]).suffix.lower() not in _VIDEO_EXTS]
 
-        dup_groups = find_exact_duplicates(photos)
-        n_auto = 0
-        for group in dup_groups:
-            keep_id = min(p["id"] for p in group)
-            keep_path = next(p["path"] for p in group if p["id"] == keep_id)
-            for p in group:
-                if p["id"] != keep_id:
-                    conn.execute(
-                        "UPDATE photos SET discarded=1, discard_reason=? WHERE id=?",
-                        (f"exact duplicate of {Path(keep_path).name}", p["id"]),
-                    )
-                    n_auto += 1
-        conn.commit()
-        print(f"✓ Auto-discarded {n_auto} exact duplicate(s) (identical bytes — no decision needed)")
-
-        # Pass 2: burst groups — report for Claude to review
-        rows = conn.execute(
-            "SELECT id, path, taken_at FROM photos WHERE discarded = 0"
-        ).fetchall()
-        photos = [{"id": r[0], "path": r[1], "taken_at": r[2]} for r in rows
-                  if Path(r[1]).suffix.lower() not in _VIDEO_EXTS]
-        burst_groups = find_burst_groups(photos, window_seconds=args.burst_window)
-
-        if not burst_groups:
-            print("✓ No burst groups found")
-            return
+        def _photo_info(p: dict, group_type: str) -> dict:
+            row = conn.execute(
+                "SELECT caption, quality, scene FROM photos WHERE id=?", (p["id"],)
+            ).fetchone()
+            size_mb = Path(p["path"]).stat().st_size / 1_048_576 if Path(p["path"]).exists() else 0
+            dt_str = datetime.fromtimestamp(p["taken_at"]).strftime("%Y-%m-%d %H:%M:%S") if p["taken_at"] else ""
+            caption, quality, scene = row if row else (None, None, None)
+            return {
+                "id": p["id"],
+                "filename": Path(p["path"]).name,
+                "path": p["path"],
+                "size_mb": round(size_mb, 1),
+                "taken_at": dt_str,
+                "caption": caption,
+                "quality": quality,
+                "scene": scene,
+            }
 
         groups_out = []
-        print(f"\n{len(burst_groups)} burst group(s) found. Claude should review and run --apply.\n")
-        for i, group in enumerate(burst_groups):
-            print(f"=== Group {i + 1} ({len(group)} photos) ===")
-            if len(group) >= 10:
-                print("  ⚠️  Large group — likely a metadata artifact (bad timestamps). Skip this group.")
-            photos_out = []
-            for p in group:
-                row = conn.execute(
-                    "SELECT caption, quality, scene FROM photos WHERE id=?", (p["id"],)
-                ).fetchone()
-                size_mb = Path(p["path"]).stat().st_size / 1_048_576 if Path(p["path"]).exists() else 0
-                dt_str = datetime.fromtimestamp(p["taken_at"]).strftime("%Y-%m-%d %H:%M:%S") if p["taken_at"] else ""
-                caption, quality, scene = row if row else (None, None, None)
-                if not caption:
-                    print(f"  ⚠️  id={p['id']} {Path(p['path']).name} has no description — run describe first")
-                print(f"  id={p['id']}  {Path(p['path']).name}  {size_mb:.1f}MB  {dt_str}")
-                print(f"    quality={quality}  scene={scene}")
-                if caption:
-                    print(f"    {caption[:100]}")
-                photos_out.append({
-                    "id": p["id"],
-                    "filename": Path(p["path"]).name,
-                    "size_mb": round(size_mb, 1),
-                    "taken_at": dt_str,
-                    "caption": caption,
-                    "quality": quality,
-                    "scene": scene,
-                })
-            groups_out.append({"group": i + 1, "photos": photos_out})
-            print()
+
+        # Pass 1: exact duplicates
+        dup_groups = find_exact_duplicates(photos)
+        for group in dup_groups:
+            photos_out = [_photo_info(p, "exact_duplicate") for p in group]
+            groups_out.append({"type": "exact_duplicate", "photos": photos_out})
+
+        # Pass 2: burst groups
+        burst_groups = find_burst_groups(photos, window_seconds=args.burst_window)
+        for group in burst_groups:
+            photos_out = [_photo_info(p, "burst") for p in group]
+            warning = len(group) >= 10
+            groups_out.append({"type": "burst", "photos": photos_out,
+                                "warning": "large group — likely bad timestamps, consider skipping" if warning else None})
+
+        if not groups_out:
+            print("✓ No duplicates or burst groups found")
+            return
+
+        n_exact = sum(1 for g in groups_out if g["type"] == "exact_duplicate")
+        n_burst = sum(1 for g in groups_out if g["type"] == "burst")
+        print(f"Found {n_exact} exact duplicate group(s) and {n_burst} burst group(s).")
+        print("Claude should review and decide which to keep, then run --apply.")
 
         report_path = Path(args.report)
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(json.dumps(groups_out, indent=2, ensure_ascii=False))
         print(f"✓ Report written to {report_path}")
-        print(f"  Review it, pick the keeper per group, then run:")
-        print(f"  python photos.py dedup --apply <picks.json>")
         print(f"\n  picks.json format: [{{'keep_id': 5, 'keep_name': 'IMG_1234.jpg', 'discard_ids': [6, 7]}}]")
+        print(f"  Then run: python photos.py dedup --apply <picks.json>")
     finally:
         conn.close()
 
