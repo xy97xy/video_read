@@ -566,6 +566,7 @@ def cmd_enhance(args):
         bar = tqdm(rows, unit="photo")
         for _photo_id, photo_path, quality in bar:
             p = Path(photo_path)
+            bar.set_description(p.name[:40])
             if not p.exists() or p.suffix.lower() in _VIDEO_EXTS:
                 n_skipped += 1
                 continue
@@ -584,7 +585,6 @@ def cmd_enhance(args):
                 comparison = make_comparison(img, enhanced)
                 comparison.save(str(compare_path), "JPEG", quality=95)
                 n_enhanced += 1
-                bar.set_description(p.name[:40])
             except Exception as e:
                 print(f"\n  Warning: could not enhance {p.name}: {e}")
                 n_skipped += 1
