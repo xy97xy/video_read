@@ -59,7 +59,7 @@ class ClaudeDescriber:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30.0)
             raw = stdout.decode("utf-8", errors="replace")
             result = _parse_describe_json(raw)
             return result if result is not None else _NULL.copy()
