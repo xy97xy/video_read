@@ -317,11 +317,23 @@ def cmd_dedup(args):
         conn.close()
 
 
+def _cmd_benchmark(conn, args):
+    print("⚠ Benchmark mode not yet implemented.")
+
+
 def cmd_describe(args):
-    from photos.describe import load_qwen, describe_photo
+    import asyncio
+    from photos.describe import load_qwen, describe_photo, ClaudeDescriber
 
     conn = _init_db(args.db)
+    provider = getattr(args, "provider", "qwen")
+    benchmark = getattr(args, "benchmark", False)
+
     try:
+        if benchmark:
+            _cmd_benchmark(conn, args)
+            return
+
         if getattr(args, "force", False):
             rows = conn.execute(
                 "SELECT id, path FROM photos WHERE discarded = 0"
@@ -335,29 +347,51 @@ def cmd_describe(args):
             print("✓ All photos already described. Use --force to re-describe.")
             return
 
-        print(f"Loading Qwen2.5-VL ({len(rows)} photos to describe)...")
-        t0 = time.time()
-        model, processor = load_qwen()
-        print(f"Model loaded in {time.time() - t0:.0f}s")
-
         _VIDEO_EXTS = {'.mp4', '.mov', '.m4v', '.avi'}
-        n_described = 0
-        bar = tqdm(rows, unit="photo")
-        for photo_id, photo_path in bar:
-            p = Path(photo_path)
-            if not p.exists() or p.suffix.lower() in _VIDEO_EXTS:
-                continue
-            bar.set_description(p.name[:40])
-            result = describe_photo(model, processor, p)
-            conn.execute(
-                "UPDATE photos SET caption=?, quality=?, scene=?, people=?, described_at=? WHERE id=?",
-                (result["caption"], result["quality"], result["scene"], result["people"],
-                 int(time.time()), photo_id),
-            )
-            conn.commit()
-            n_described += 1
+        photos = [
+            {"id": photo_id, "path": photo_path}
+            for photo_id, photo_path in rows
+            if Path(photo_path).exists() and Path(photo_path).suffix.lower() not in _VIDEO_EXTS
+        ]
 
-        print(f"\n✓ Described {n_described} photo(s)")
+        if provider == "claude":
+            describer = ClaudeDescriber(
+                model=getattr(args, "model", "haiku"),
+                workers=getattr(args, "workers", 5),
+            )
+            print(f"Describing {len(photos)} photos with Claude ({describer.model}, {describer.workers} workers)...")
+            results = asyncio.run(describer.describe_batch(photos))
+            n_described = 0
+            for photo, result in zip(photos, results):
+                conn.execute(
+                    "UPDATE photos SET caption=?, quality=?, scene=?, people=?, described_at=? WHERE id=?",
+                    (result["caption"], result["quality"], result["scene"], result["people"],
+                     int(time.time()), photo["id"]),
+                )
+                n_described += 1
+            conn.commit()
+            print(f"\n✓ Described {n_described} photo(s) with Claude {describer.model}")
+        else:
+            print(f"Loading Qwen2.5-VL ({len(photos)} photos to describe)...")
+            t0 = time.time()
+            model, processor = load_qwen()
+            print(f"Model loaded in {time.time() - t0:.0f}s")
+
+            n_described = 0
+            bar = tqdm(photos, unit="photo")
+            for photo in bar:
+                p = Path(photo["path"])
+                bar.set_description(p.name[:40])
+                result = describe_photo(model, processor, p)
+                conn.execute(
+                    "UPDATE photos SET caption=?, quality=?, scene=?, people=?, described_at=? WHERE id=?",
+                    (result["caption"], result["quality"], result["scene"], result["people"],
+                     int(time.time()), photo["id"]),
+                )
+                conn.commit()
+                n_described += 1
+
+            print(f"\n✓ Described {n_described} photo(s)")
     finally:
         conn.close()
 
@@ -652,9 +686,18 @@ def main():
     d = sub.add_parser("dedup", help="Auto-discard byte-identical and visually identical duplicates")
     d.add_argument("--db", default="photos.db", metavar="DB")
 
-    desc = sub.add_parser("describe", help="Describe photos with Qwen2.5-VL → store in DB")
+    desc = sub.add_parser("describe", help="Describe photos with Qwen2.5-VL or Claude → store in DB")
     desc.add_argument("--db", default="photos.db", metavar="DB")
     desc.add_argument("--force", action="store_true", help="Re-describe already-described photos")
+    desc.add_argument("--provider", choices=["qwen", "claude"], default="qwen",
+                      help="Vision model provider (default: qwen)")
+    desc.add_argument("--model", default="haiku",
+                      choices=["haiku", "sonnet", "opus"],
+                      help="Claude model to use (only with --provider claude, default: haiku)")
+    desc.add_argument("--workers", type=int, default=5, metavar="N",
+                      help="Concurrent Claude workers (only with --provider claude, default: 5)")
+    desc.add_argument("--benchmark", action="store_true",
+                      help="Compare providers on 20 sample photos, no DB writes")
 
     rec = sub.add_parser("recommend", help="Auto-flag bad quality photos and write review report")
     rec.add_argument("--db", default="photos.db", metavar="DB")

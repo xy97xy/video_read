@@ -149,3 +149,87 @@ def test_cmd_describe_skips_missing_file(tmp_path):
     val = conn.execute("SELECT described_at FROM photos WHERE id=1").fetchone()[0]
     conn.close()
     assert val is None, "described_at should stay NULL for missing file"
+
+
+def test_cmd_describe_claude_provider_writes_db(tmp_path):
+    """--provider claude calls ClaudeDescriber.describe_batch and writes results to DB."""
+    real_file = tmp_path / "photo.jpg"
+    real_file.write_bytes(b"fake jpeg data")
+
+    db = str(tmp_path / "photos.db")
+    conn = _init_db(db)
+    conn.execute(
+        "INSERT INTO photos (id, path, taken_at) VALUES (1, ?, 1000)",
+        (str(real_file),),
+    )
+    conn.commit()
+    conn.close()
+
+    args = argparse.Namespace(
+        db=db, force=False, provider="claude", model="haiku", workers=2, benchmark=False
+    )
+
+    fake_result = {"caption": "a lake at dusk", "quality": "good", "scene": "lake", "people": "none"}
+
+    async def fake_batch(photos):
+        return [fake_result for _ in photos]
+
+    mock_describer = MagicMock()
+    mock_describer.describe_batch = fake_batch
+
+    with patch("photos.describe.ClaudeDescriber", return_value=mock_describer):
+        cmd_describe(args)
+
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect(db)
+    row = conn.execute(
+        "SELECT caption, quality, scene, people, described_at FROM photos WHERE id=1"
+    ).fetchone()
+    conn.close()
+
+    assert row[0] == "a lake at dusk"
+    assert row[1] == "good"
+    assert row[4] is not None
+
+
+def test_cmd_describe_qwen_path_unchanged(tmp_path):
+    """--provider qwen still calls load_qwen and describe_photo."""
+    real_file = tmp_path / "photo.jpg"
+    real_file.write_bytes(b"fake jpeg data")
+
+    db = str(tmp_path / "photos.db")
+    conn = _init_db(db)
+    conn.execute(
+        "INSERT INTO photos (id, path, taken_at) VALUES (1, ?, 1000)",
+        (str(real_file),),
+    )
+    conn.commit()
+    conn.close()
+
+    args = argparse.Namespace(
+        db=db, force=False, provider="qwen", model="haiku", workers=5, benchmark=False
+    )
+    mock_model = MagicMock()
+    mock_processor = MagicMock()
+    fake_result = {"caption": "a forest path", "quality": "good", "scene": "forest", "people": "none"}
+
+    with patch("photos.describe.load_qwen", return_value=(mock_model, mock_processor)):
+        with patch("photos.describe.describe_photo", return_value=fake_result):
+            cmd_describe(args)
+
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect(db)
+    row = conn.execute("SELECT caption FROM photos WHERE id=1").fetchone()
+    conn.close()
+    assert row[0] == "a forest path"
+
+
+def test_cmd_describe_new_flags_in_help():
+    result = subprocess.run(
+        [sys.executable, "photos.py", "describe", "--help"],
+        capture_output=True, text=True, cwd=PROJ,
+    )
+    assert "--provider" in result.stdout
+    assert "--model" in result.stdout
+    assert "--workers" in result.stdout
+    assert "--benchmark" in result.stdout
