@@ -59,7 +59,9 @@ class ClaudeDescriber:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
+            if proc.returncode != 0:
+                log.warning(f"claude exited {proc.returncode} for {photo_path}: {stderr.decode('utf-8', errors='replace')[:200]}")
             raw = stdout.decode("utf-8", errors="replace")
             result = _parse_describe_json(raw)
             return result if result is not None else _NULL.copy()

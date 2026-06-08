@@ -182,7 +182,7 @@ def test_claude_describer_describe_one_returns_null_on_bad_json(tmp_path):
     assert result["quality"] is None
 
 
-def test_claude_describer_describe_batch_respects_workers(tmp_path):
+def test_claude_describer_describe_batch_returns_all_results(tmp_path):
     photos = []
     for i in range(4):
         p = tmp_path / f"p{i}.jpg"
