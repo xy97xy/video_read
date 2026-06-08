@@ -318,7 +318,52 @@ def cmd_dedup(args):
 
 
 def _cmd_benchmark(conn, args):
-    print("⚠ Benchmark mode not yet implemented.")
+    import asyncio
+    from photos.describe import ClaudeDescriber
+
+    rows = conn.execute(
+        "SELECT id, path, caption, scene, people, quality FROM photos "
+        "WHERE described_at IS NOT NULL AND discarded=0 ORDER BY RANDOM() LIMIT 20"
+    ).fetchall()
+
+    if not rows:
+        print("⚠ No described photos found. Run describe first.")
+        return
+
+    photos = [{"id": r[0], "path": r[1]} for r in rows]
+    existing = {r[0]: {"caption": r[2], "scene": r[3], "people": r[4], "quality": r[5]} for r in rows}
+
+    n = len(photos)
+    print(f"Benchmarking {n} photos across providers...\n")
+
+    # Claude haiku
+    t0 = time.time()
+    haiku = ClaudeDescriber(model="haiku", workers=getattr(args, "workers", 5))
+    haiku_results = asyncio.run(haiku.describe_batch(photos))
+    haiku_time = time.time() - t0
+
+    # Claude sonnet
+    t0 = time.time()
+    sonnet = ClaudeDescriber(model="sonnet", workers=getattr(args, "workers", 5))
+    sonnet_results = asyncio.run(sonnet.describe_batch(photos))
+    sonnet_time = time.time() - t0
+
+    print(f"claude-haiku:  {haiku_time:.1f}s total  ({haiku_time/n:.1f}s/photo)")
+    print(f"claude-sonnet: {sonnet_time:.1f}s total  ({sonnet_time/n:.1f}s/photo)")
+    print()
+
+    # Side-by-side caption comparison for first 5 photos
+    print("--- Caption comparison (first 5 photos) ---")
+    for i, photo in enumerate(photos[:5]):
+        print(f"\nPhoto: {Path(photo['path']).name}")
+        qwen_cap = existing[photo["id"]].get("caption") or "(none)"
+        haiku_cap = haiku_results[i].get("caption") or "(none)"
+        sonnet_cap = sonnet_results[i].get("caption") or "(none)"
+        print(f"  [qwen (existing)] {qwen_cap}")
+        print(f"  [claude-haiku   ] {haiku_cap}")
+        print(f"  [claude-sonnet  ] {sonnet_cap}")
+
+    print("\n✓ Benchmark complete. No DB writes performed.")
 
 
 def cmd_describe(args):

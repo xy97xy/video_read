@@ -233,3 +233,43 @@ def test_cmd_describe_new_flags_in_help():
     assert "--model" in result.stdout
     assert "--workers" in result.stdout
     assert "--benchmark" in result.stdout
+
+
+def test_benchmark_does_not_write_db(tmp_path):
+    """Benchmark mode reads DB but never writes described_at."""
+    real_file = tmp_path / "photo.jpg"
+    real_file.write_bytes(b"fake jpeg data")
+
+    db = str(tmp_path / "photos.db")
+    conn = _init_db(db)
+    conn.execute(
+        "INSERT INTO photos (id, path, taken_at, described_at, caption, quality, scene, people) "
+        "VALUES (1, ?, 1000, 9999, 'old caption', 'good', 'park', 'none')",
+        (str(real_file),),
+    )
+    conn.commit()
+    conn.close()
+
+    args = argparse.Namespace(
+        db=db, force=False, provider="qwen", model="haiku", workers=2, benchmark=True
+    )
+
+    fake_result = {"caption": "new caption", "quality": "good", "scene": "beach", "people": "few"}
+
+    async def fake_batch(photos):
+        return [fake_result for _ in photos]
+
+    mock_describer = MagicMock()
+    mock_describer.describe_batch = fake_batch
+
+    with patch("photos.describe.ClaudeDescriber", return_value=mock_describer):
+        with patch("photos.describe.load_qwen", return_value=(MagicMock(), MagicMock())):
+            with patch("photos.describe.describe_photo", return_value=fake_result):
+                cmd_describe(args)
+
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect(db)
+    row = conn.execute("SELECT caption, described_at FROM photos WHERE id=1").fetchone()
+    conn.close()
+    assert row[0] == "old caption", "benchmark must not overwrite DB"
+    assert row[1] == 9999, "described_at must not change"
