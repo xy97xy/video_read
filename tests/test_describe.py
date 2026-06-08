@@ -101,3 +101,110 @@ def test_describe_photo_returns_nulls_for_missing_file():
     from pathlib import Path
     result = describe_photo(None, None, Path("/nonexistent/ghost.jpg"))
     assert result == {"caption": None, "quality": None, "scene": None, "people": None}
+
+
+import asyncio
+import json
+import pytest
+from unittest.mock import patch, AsyncMock, MagicMock
+
+
+def test_claude_describer_init_finds_binary(tmp_path):
+    fake_bin = tmp_path / "claude"
+    fake_bin.write_text("#!/bin/sh\necho hi")
+    fake_bin.chmod(0o755)
+    with patch("shutil.which", return_value=str(fake_bin)):
+        from photos.describe import ClaudeDescriber
+        d = ClaudeDescriber(model="haiku", workers=3)
+    assert d.claude_bin == str(fake_bin)
+    assert d.model == "haiku"
+    assert d.workers == 3
+
+
+def test_claude_describer_init_raises_if_not_found():
+    with patch("shutil.which", return_value=None):
+        with patch("pathlib.Path.exists", return_value=False):
+            from photos.describe import ClaudeDescriber
+            with pytest.raises(RuntimeError, match="claude"):
+                ClaudeDescriber()
+
+
+def test_claude_describer_describe_one_returns_parsed_dict(tmp_path):
+    photo = tmp_path / "test.jpg"
+    photo.write_bytes(b"fake")
+    payload = json.dumps({
+        "caption": "a sunny beach",
+        "scene": "beach",
+        "people": "few",
+        "quality": "good",
+    })
+
+    async def run():
+        from photos.describe import ClaudeDescriber
+        d = ClaudeDescriber.__new__(ClaudeDescriber)
+        d.claude_bin = "/fake/claude"
+        d.model = "haiku"
+        d.workers = 1
+
+        mock_proc = MagicMock()
+        mock_proc.communicate = AsyncMock(return_value=(payload.encode(), b""))
+        mock_proc.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            return await d.describe_one(str(photo))
+
+    result = asyncio.run(run())
+    assert result["caption"] == "a sunny beach"
+    assert result["scene"] == "beach"
+    assert result["quality"] == "good"
+
+
+def test_claude_describer_describe_one_returns_null_on_bad_json(tmp_path):
+    photo = tmp_path / "test.jpg"
+    photo.write_bytes(b"fake")
+
+    async def run():
+        from photos.describe import ClaudeDescriber
+        d = ClaudeDescriber.__new__(ClaudeDescriber)
+        d.claude_bin = "/fake/claude"
+        d.model = "haiku"
+        d.workers = 1
+
+        mock_proc = MagicMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"not json at all", b""))
+        mock_proc.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            return await d.describe_one(str(photo))
+
+    result = asyncio.run(run())
+    assert result["caption"] is None
+    assert result["quality"] is None
+
+
+def test_claude_describer_describe_batch_respects_workers(tmp_path):
+    photos = []
+    for i in range(4):
+        p = tmp_path / f"p{i}.jpg"
+        p.write_bytes(b"fake")
+        photos.append({"id": i, "path": str(p)})
+
+    payload = json.dumps({"caption": "test", "scene": "x", "people": "none", "quality": "good"})
+
+    async def run():
+        from photos.describe import ClaudeDescriber
+        d = ClaudeDescriber.__new__(ClaudeDescriber)
+        d.claude_bin = "/fake/claude"
+        d.model = "haiku"
+        d.workers = 2
+
+        mock_proc = MagicMock()
+        mock_proc.communicate = AsyncMock(return_value=(payload.encode(), b""))
+        mock_proc.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            return await d.describe_batch(photos)
+
+    results = asyncio.run(run())
+    assert len(results) == 4
+    assert all(r["caption"] == "test" for r in results)

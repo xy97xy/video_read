@@ -1,8 +1,10 @@
 from __future__ import annotations
+import asyncio
 import json
 import logging
 import os
 import re
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -23,6 +25,61 @@ _RETRY_TEMPLATE = (
     "Your response was: {prev}\n"
     "Output ONLY the JSON object."
 )
+
+CLAUDE_PROMPT = (
+    "Read this image file and return ONLY a JSON object with no markdown, no extra text:\n"
+    '{{"caption": "one sentence describing the main subject and what is happening",\n'
+    ' "quality": "one word: good, blurry, dark, overexposed, or obstructed",\n'
+    ' "scene": "brief location context, e.g. mountain trail, indoor kitchen, city street",\n'
+    ' "people": "one word: none, one, few, or many"}}\n\n'
+    "Image: {path}"
+)
+
+_NULL = {"caption": None, "quality": None, "scene": None, "people": None}
+
+
+class ClaudeDescriber:
+    def __init__(self, model: str = "haiku", workers: int = 5):
+        bin_path = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
+        if not Path(bin_path).exists():
+            raise RuntimeError(
+                f"claude CLI not found. Expected at {bin_path}. "
+                "Install Claude Code: https://claude.ai/code"
+            )
+        self.claude_bin = bin_path
+        self.model = model
+        self.workers = workers
+
+    async def describe_one(self, photo_path: str) -> dict:
+        prompt = CLAUDE_PROMPT.format(path=photo_path)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                self.claude_bin, "-p", "--model", self.model,
+                "--dangerously-skip-permissions", prompt,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+            raw = stdout.decode("utf-8", errors="replace")
+            result = _parse_describe_json(raw)
+            return result if result is not None else _NULL.copy()
+        except asyncio.TimeoutError:
+            log.warning(f"claude timeout for {photo_path}")
+            return _NULL.copy()
+        except Exception as e:
+            log.warning(f"claude error for {photo_path}: {e}")
+            return _NULL.copy()
+
+    async def describe_batch(self, photos: list[dict]) -> list[dict]:
+        sem = asyncio.Semaphore(self.workers)
+        results = [None] * len(photos)
+
+        async def _one(i, photo):
+            async with sem:
+                results[i] = await self.describe_one(photo["path"])
+
+        await asyncio.gather(*[_one(i, p) for i, p in enumerate(photos)])
+        return results
 
 
 def _parse_describe_json(raw: str) -> dict | None:
