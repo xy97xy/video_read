@@ -235,6 +235,134 @@ def test_cmd_describe_new_flags_in_help():
     assert "--benchmark" in result.stdout
 
 
+def test_cmd_describe_video_writes_video_scenes(tmp_path):
+    """Video rows are described and their scenes written to video_scenes table."""
+    import sys
+    from unittest.mock import patch
+
+    real_video = tmp_path / "clip.mp4"
+    real_video.write_bytes(b"fake video data")
+
+    db = str(tmp_path / "photos.db")
+    conn = _init_db(db)
+    conn.execute(
+        "INSERT INTO photos (id, path, taken_at) VALUES (1, ?, 1000)",
+        (str(real_video),),
+    )
+    conn.commit()
+    conn.close()
+
+    args = argparse.Namespace(
+        db=db, force=False, provider="qwen", model="haiku", workers=5, benchmark=False
+    )
+
+    fake_result = {
+        "caption": "a sunset timelapse",
+        "quality": "good",
+        "scene": None,
+        "people": "none",
+        "scenes": [
+            {"start_sec": 0.0, "end_sec": 5.0, "caption": "a sunset timelapse", "score": 2.5},
+            {"start_sec": 5.0, "end_sec": 10.0, "caption": "clouds drifting", "score": 1.5},
+        ],
+    }
+
+    with patch("photos.describe.load_qwen", return_value=(MagicMock(), MagicMock())):
+        with patch("photos.describe.describe_video", return_value=fake_result):
+            cmd_describe(args)
+
+    conn = sqlite3.connect(db)
+    photo_row = conn.execute(
+        "SELECT caption, quality, described_at FROM photos WHERE id=1"
+    ).fetchone()
+    scene_rows = conn.execute(
+        "SELECT start_sec, end_sec, caption, score FROM video_scenes WHERE photo_id=1"
+    ).fetchall()
+    conn.close()
+
+    assert photo_row[0] == "a sunset timelapse"
+    assert photo_row[1] == "good"
+    assert photo_row[2] is not None
+    assert len(scene_rows) == 2
+    assert scene_rows[0] == (0.0, 5.0, "a sunset timelapse", 2.5)
+    assert scene_rows[1] == (5.0, 10.0, "clouds drifting", 1.5)
+
+
+def test_cmd_describe_claude_provider_skips_videos(tmp_path):
+    """--provider claude processes photos but routes videos through Qwen."""
+    import sys
+    from unittest.mock import patch, call
+
+    real_photo = tmp_path / "photo.jpg"
+    real_photo.write_bytes(b"fake jpeg")
+    real_video = tmp_path / "clip.mp4"
+    real_video.write_bytes(b"fake video")
+
+    db = str(tmp_path / "photos.db")
+    conn = _init_db(db)
+    conn.execute("INSERT INTO photos (id, path, taken_at) VALUES (1, ?, 1000)", (str(real_photo),))
+    conn.execute("INSERT INTO photos (id, path, taken_at) VALUES (2, ?, 1000)", (str(real_video),))
+    conn.commit()
+    conn.close()
+
+    args = argparse.Namespace(
+        db=db, force=False, provider="claude", model="haiku", workers=2, benchmark=False
+    )
+
+    claude_result = {"caption": "a park", "quality": "good", "scene": "park", "people": "none"}
+    video_result = {
+        "caption": "a walk in the park",
+        "quality": "good", "scene": None, "people": "none",
+        "scenes": [{"start_sec": 0.0, "end_sec": 5.0, "caption": "a walk in the park", "score": 2.0}],
+    }
+
+    async def fake_batch(photos):
+        return [claude_result for _ in photos]
+
+    mock_claude = MagicMock()
+    mock_claude.describe_batch = fake_batch
+
+    with patch("photos.describe.ClaudeDescriber", return_value=mock_claude):
+        with patch("photos.describe.load_qwen", return_value=(MagicMock(), MagicMock())):
+            with patch("photos.describe.describe_video", return_value=video_result):
+                cmd_describe(args)
+
+    conn = sqlite3.connect(db)
+    photo_row = conn.execute("SELECT caption FROM photos WHERE id=1").fetchone()
+    video_row = conn.execute("SELECT caption FROM photos WHERE id=2").fetchone()
+    scene_count = conn.execute("SELECT COUNT(*) FROM video_scenes WHERE photo_id=2").fetchone()[0]
+    conn.close()
+
+    assert photo_row[0] == "a park"
+    assert video_row[0] == "a walk in the park"
+    assert scene_count == 1
+
+
+def test_cmd_describe_corrupt_video_is_skipped(tmp_path):
+    """If describe_video raises, the video row stays with described_at=NULL."""
+    real_video = tmp_path / "bad.mp4"
+    real_video.write_bytes(b"not a real video")
+
+    db = str(tmp_path / "photos.db")
+    conn = _init_db(db)
+    conn.execute("INSERT INTO photos (id, path, taken_at) VALUES (1, ?, 1000)", (str(real_video),))
+    conn.commit()
+    conn.close()
+
+    args = argparse.Namespace(
+        db=db, force=False, provider="qwen", model="haiku", workers=5, benchmark=False
+    )
+
+    with patch("photos.describe.load_qwen", return_value=(MagicMock(), MagicMock())):
+        with patch("photos.describe.describe_video", side_effect=RuntimeError("corrupt")):
+            cmd_describe(args)
+
+    conn = sqlite3.connect(db)
+    val = conn.execute("SELECT described_at FROM photos WHERE id=1").fetchone()[0]
+    conn.close()
+    assert val is None, "described_at must stay NULL when video description fails"
+
+
 def test_benchmark_does_not_write_db(tmp_path):
     """Benchmark mode reads DB but never writes described_at."""
     real_file = tmp_path / "photo.jpg"

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import logging
 import re
 import shutil
 import sqlite3
@@ -14,6 +15,8 @@ from tqdm import tqdm
 from photos.metadata import find_media_files, extract_metadata, reverse_geocode
 from photos.cluster import build_clusters
 from photos.dedup import find_exact_duplicates, find_phash_duplicates
+
+log = logging.getLogger(__name__)
 
 
 def _init_db(db_path: str) -> sqlite3.Connection:
@@ -425,7 +428,7 @@ def _cmd_benchmark(conn, args):
 
 def cmd_describe(args):
     import asyncio
-    from photos.describe import load_qwen, describe_photo, ClaudeDescriber
+    from photos.describe import load_qwen, describe_photo, ClaudeDescriber, describe_video
 
     conn = _init_db(args.db)
     provider = getattr(args, "provider", "qwen")
@@ -449,22 +452,28 @@ def cmd_describe(args):
             print("✓ All photos already described. Use --force to re-describe.")
             return
 
-        _VIDEO_EXTS = {'.mp4', '.mov', '.m4v', '.avi'}
-        photos = [
-            {"id": photo_id, "path": photo_path}
-            for photo_id, photo_path in rows
-            if Path(photo_path).exists() and Path(photo_path).suffix.lower() not in _VIDEO_EXTS
-        ]
+        all_items = [{"id": r[0], "path": r[1]} for r in rows if Path(r[1]).exists()]
+        photo_rows = [r for r in all_items if Path(r["path"]).suffix.lower() not in _VIDEO_EXTS]
+        video_rows = [r for r in all_items if Path(r["path"]).suffix.lower() in _VIDEO_EXTS]
 
-        if provider == "claude":
+        need_qwen = (provider == "qwen" and photo_rows) or bool(video_rows)
+        model = processor = None
+        if need_qwen:
+            n_qwen = (len(photo_rows) if provider == "qwen" else 0) + len(video_rows)
+            print(f"Loading Qwen2.5-VL ({n_qwen} item(s) to describe)...")
+            t0 = time.time()
+            model, processor = load_qwen()
+            print(f"Model loaded in {time.time() - t0:.0f}s")
+
+        if provider == "claude" and photo_rows:
             describer = ClaudeDescriber(
                 model=getattr(args, "model", "haiku"),
                 workers=getattr(args, "workers", 5),
             )
-            print(f"Describing {len(photos)} photos with Claude ({describer.model}, {describer.workers} workers)...")
-            results = asyncio.run(describer.describe_batch(photos))
+            print(f"Describing {len(photo_rows)} photos with Claude ({describer.model}, {describer.workers} workers)...")
+            results = asyncio.run(describer.describe_batch(photo_rows))
             n_described = 0
-            for photo, result in zip(photos, results):
+            for photo, result in zip(photo_rows, results):
                 conn.execute(
                     "UPDATE photos SET caption=?, quality=?, scene=?, people=?, described_at=? WHERE id=?",
                     (result["caption"], result["quality"], result["scene"], result["people"],
@@ -473,14 +482,9 @@ def cmd_describe(args):
                 n_described += 1
             conn.commit()
             print(f"\n✓ Described {n_described} photo(s) with Claude {describer.model}")
-        else:
-            print(f"Loading Qwen2.5-VL ({len(photos)} photos to describe)...")
-            t0 = time.time()
-            model, processor = load_qwen()
-            print(f"Model loaded in {time.time() - t0:.0f}s")
-
+        elif photo_rows:
             n_described = 0
-            bar = tqdm(photos, unit="photo")
+            bar = tqdm(photo_rows, unit="photo")
             for photo in bar:
                 p = Path(photo["path"])
                 bar.set_description(p.name[:40])
@@ -492,8 +496,34 @@ def cmd_describe(args):
                 )
                 conn.commit()
                 n_described += 1
-
             print(f"\n✓ Described {n_described} photo(s)")
+
+        if video_rows:
+            n_videos = 0
+            bar = tqdm(video_rows, unit="video")
+            for video in bar:
+                p = Path(video["path"])
+                bar.set_description(p.name[:40])
+                try:
+                    result = describe_video(model, processor, p)
+                except Exception as e:
+                    log.warning(f"describe_video failed for {p.name}: {e}")
+                    continue
+                conn.execute(
+                    "UPDATE photos SET caption=?, quality=?, scene=?, people=?, described_at=? WHERE id=?",
+                    (result["caption"], result["quality"], result["scene"], result["people"],
+                     int(time.time()), video["id"]),
+                )
+                for scene in result["scenes"]:
+                    conn.execute(
+                        "INSERT INTO video_scenes (photo_id, start_sec, end_sec, caption, score, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (video["id"], scene["start_sec"], scene["end_sec"],
+                         scene["caption"], scene["score"], int(time.time())),
+                    )
+                conn.commit()
+                n_videos += 1
+            print(f"\n✓ Described {n_videos} video(s)")
     finally:
         conn.close()
 
