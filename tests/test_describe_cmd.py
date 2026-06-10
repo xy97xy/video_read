@@ -291,7 +291,7 @@ def test_cmd_describe_video_writes_video_scenes(tmp_path):
 def test_cmd_describe_claude_provider_skips_videos(tmp_path):
     """--provider claude processes photos but routes videos through Qwen."""
     import sys
-    from unittest.mock import patch, call
+    from unittest.mock import patch
 
     real_photo = tmp_path / "photo.jpg"
     real_photo.write_bytes(b"fake jpeg")
