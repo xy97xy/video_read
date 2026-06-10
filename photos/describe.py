@@ -238,7 +238,7 @@ def describe_video(model, processor, path: Path) -> dict:
             try:
                 cut_segment(str(path), chunk["start"], chunk["end"], seg_path)
                 result = describe_chunk(model, processor, seg_path, chunk["start"], chunk["end"])
-                score = compute_chunk_score(result)
+                score = compute_chunk_score(result)  # loudness/profile not available here; energy+quality only
                 described_scenes.append({
                     "start_sec": chunk["start"],
                     "end_sec": chunk["end"],
