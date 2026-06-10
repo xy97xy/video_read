@@ -211,3 +211,51 @@ def describe_photo(model, processor, path: Path) -> dict:
     finally:
         if tmp_name:
             os.unlink(tmp_name)
+
+
+def describe_video(model, processor, path: Path) -> dict:
+    from pipeline import (
+        detect_scenes, split_long_scenes, describe_chunk,
+        cut_segment, compute_chunk_score,
+    )
+
+    try:
+        scenes = detect_scenes(str(path))
+    except Exception as e:
+        log.warning(f"scene detection failed for {path.name}: {e}")
+        return {"caption": None, "quality": "good", "scene": None, "people": "none", "scenes": []}
+
+    chunks = split_long_scenes(scenes)
+
+    if not chunks:
+        return {"caption": "(no scenes detected)", "quality": "good", "scene": None, "people": "none", "scenes": []}
+
+    seg_dir = tempfile.mkdtemp(prefix="video_describe_")
+    described_scenes = []
+    try:
+        for i, chunk in enumerate(chunks):
+            seg_path = os.path.join(seg_dir, f"seg_{i}.mp4")
+            try:
+                cut_segment(str(path), chunk["start"], chunk["end"], seg_path)
+                result = describe_chunk(model, processor, seg_path, chunk["start"], chunk["end"])
+                score = compute_chunk_score(result)
+                described_scenes.append({
+                    "start_sec": chunk["start"],
+                    "end_sec": chunk["end"],
+                    "caption": result.get("action"),
+                    "score": score,
+                })
+            except Exception as e:
+                log.warning(f"scene {i} of {path.name} failed: {e}")
+    finally:
+        shutil.rmtree(seg_dir, ignore_errors=True)
+
+    summary = next((s["caption"] for s in described_scenes if s.get("caption")), None)
+
+    return {
+        "caption": summary,
+        "quality": "good",
+        "scene": None,
+        "people": "none",
+        "scenes": described_scenes,
+    }
