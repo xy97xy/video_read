@@ -182,6 +182,48 @@ def test_claude_describer_describe_one_returns_null_on_bad_json(tmp_path):
     assert result["quality"] is None
 
 
+def test_video_scenes_table_created(tmp_path):
+    photos = _load_photos_module()
+    db = str(tmp_path / "photos.db")
+    conn = photos._init_db(db)
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    conn.close()
+    assert "video_scenes" in tables
+
+
+def test_video_scenes_table_columns(tmp_path):
+    photos = _load_photos_module()
+    db = str(tmp_path / "photos.db")
+    conn = photos._init_db(db)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(video_scenes)").fetchall()}
+    conn.close()
+    for col in ("id", "photo_id", "start_sec", "end_sec", "caption", "score", "created_at"):
+        assert col in cols, f"Missing column: {col}"
+
+
+def test_video_scenes_created_on_existing_db(tmp_path):
+    """_init_db adds video_scenes to a DB created before this migration."""
+    import sqlite3 as _sqlite3
+    db_path = str(tmp_path / "photos.db")
+    conn = _sqlite3.connect(db_path)
+    conn.execute("""CREATE TABLE photos (
+        id INTEGER PRIMARY KEY, path TEXT UNIQUE, taken_at INTEGER,
+        lat REAL, lon REAL, place TEXT, cluster_id INTEGER, discarded INTEGER DEFAULT 0
+    )""")
+    conn.commit()
+    conn.close()
+
+    photos = _load_photos_module()
+    conn = photos._init_db(db_path)
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    conn.close()
+    assert "video_scenes" in tables
+
+
 def test_claude_describer_describe_batch_returns_all_results(tmp_path):
     photos = []
     for i in range(4):

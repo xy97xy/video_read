@@ -36,6 +36,17 @@ def _init_db(db_path: str) -> sqlite3.Connection:
             flagged      INTEGER DEFAULT 0
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS video_scenes (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            photo_id    INTEGER NOT NULL REFERENCES photos(id),
+            start_sec   REAL NOT NULL,
+            end_sec     REAL NOT NULL,
+            caption     TEXT,
+            score       REAL,
+            created_at  INTEGER
+        )
+    """)
     cols = {row[1] for row in conn.execute("PRAGMA table_info(photos)")}
     migrations = [
         ("discarded",    "ALTER TABLE photos ADD COLUMN discarded    INTEGER DEFAULT 0"),
@@ -94,6 +105,52 @@ def cmd_scan(args):
     print(f"  Saved to {args.db}")
 
 
+def cmd_fix_dates(args):
+    """Re-extract dates/GPS for photos whose taken_at looks like a scan-date artifact."""
+    from photos.metadata import extract_metadata
+    conn = _init_db(args.db)
+
+    # Detect scan-date artifact days: calendar days shared by >50 photos.
+    # Google Takeout stamps batches with the export date when EXIF is unreadable.
+    rows = conn.execute("""
+        SELECT date(taken_at, 'unixepoch'), COUNT(*)
+        FROM photos WHERE discarded=0
+        GROUP BY date(taken_at, 'unixepoch')
+        HAVING COUNT(*) > 50
+        ORDER BY COUNT(*) DESC
+    """).fetchall()
+    suspect_day_strs = {r[0] for r in rows}
+    print(f"Suspect bulk-assigned days: {sorted(suspect_day_strs)}")
+
+    targets = conn.execute("""
+        SELECT id, path FROM photos
+        WHERE taken_at IS NULL
+           OR date(taken_at, 'unixepoch') IN ({})
+    """.format(','.join('?' * len(suspect_day_strs))),
+        list(suspect_day_strs)
+    ).fetchall()
+
+    print(f"Re-checking {len(targets)} photos...")
+    n_fixed = 0
+    for pid, path in tqdm(targets, unit="photo"):
+        p = Path(path)
+        if not p.exists():
+            continue
+        new_date, new_lat, new_lon = extract_metadata(p)
+        old_row = conn.execute("SELECT taken_at, lat FROM photos WHERE id=?", (pid,)).fetchone()
+        old_date = old_row[0]
+        if new_date != old_date or (new_lat is not None and old_row[1] is None):
+            conn.execute(
+                "UPDATE photos SET taken_at=?, lat=?, lon=? WHERE id=?",
+                (new_date, new_lat, new_lon, pid)
+            )
+            n_fixed += 1
+
+    conn.commit()
+    conn.close()
+    print(f"✓ Fixed {n_fixed} photos")
+
+
 def cmd_cluster(args):
     clusters_path = Path(args.clusters)
     if clusters_path.exists() and not getattr(args, "force", False):
@@ -105,7 +162,7 @@ def cmd_cluster(args):
 
     conn = sqlite3.connect(args.db)
     rows = conn.execute(
-        "SELECT id, path, taken_at, lat, lon, place FROM photos"
+        "SELECT id, path, taken_at, lat, lon, place FROM photos WHERE discarded=0"
     ).fetchall()
     conn.close()
 
@@ -772,13 +829,17 @@ def main():
     ex.add_argument("--db", default="photos.db", metavar="DB")
     ex.add_argument("--output-dir", default="output/to-delete", metavar="DIR")
 
+    fd = sub.add_parser("fix-dates", help="Re-extract dates/GPS for scan-date artifact photos")
+    fd.add_argument("--db", default="photos.db", metavar="DB")
+
     args = p.parse_args()
     {"scan": cmd_scan, "cluster": cmd_cluster,
      "review": cmd_review, "organize": cmd_organize,
      "dedup": cmd_dedup, "describe": cmd_describe,
      "recommend": cmd_recommend, "flag": cmd_flag,
      "search": cmd_search, "enhance": cmd_enhance,
-     "export-discarded": cmd_export_discarded}[args.subcommand](args)
+     "export-discarded": cmd_export_discarded,
+     "fix-dates": cmd_fix_dates}[args.subcommand](args)
 
 
 if __name__ == "__main__":
