@@ -50,6 +50,9 @@ def _init_db(db_path: str) -> sqlite3.Connection:
             created_at  INTEGER
         )
     """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_video_scenes_photo_id ON video_scenes (photo_id)"
+    )
     cols = {row[1] for row in conn.execute("PRAGMA table_info(photos)")}
     migrations = [
         ("discarded",    "ALTER TABLE photos ADD COLUMN discarded    INTEGER DEFAULT 0"),
@@ -514,6 +517,7 @@ def cmd_describe(args):
                     (result["caption"], result["quality"], result["scene"], result["people"],
                      int(time.time()), video["id"]),
                 )
+                conn.execute("DELETE FROM video_scenes WHERE photo_id=?", (video["id"],))
                 for scene in result["scenes"]:
                     conn.execute(
                         "INSERT INTO video_scenes (photo_id, start_sec, end_sec, caption, score, created_at) "
@@ -729,8 +733,6 @@ def cmd_export_discarded(args):
 def cmd_enhance(args):
     from photos.enhance import enhance_photo, make_comparison
     from PIL import Image as _Image
-
-    _VIDEO_EXTS = {'.mp4', '.mov', '.m4v', '.avi'}
 
     cluster_names: dict[int, str] = {}
     clusters_path = Path(args.clusters)
