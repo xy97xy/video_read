@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -75,33 +76,77 @@ def _exif_metadata(path: Path) -> tuple[int | None, float | None, float | None]:
         return None, None, None
 
 
+_FILENAME_DATE_RE = re.compile(
+    r'(?<!\d)'
+    r'(\d{4})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])'  # YYYYMMDD
+    r'[_T]?'
+    r'(\d{2})(\d{2})(\d{2})'                            # HHMMSS (optional)
+    r'(?!\d)'
+)
+_FILENAME_DATEONLY_RE = re.compile(
+    r'(?<!\d)(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(?!\d)'
+)
+
+
+def _filename_date(path: Path) -> int | None:
+    """Parse date from filename patterns: PXL_YYYYMMDD_HHMMSS, IMG_YYYYMMDD_HHMMSS, YYYY-MM-DD."""
+    name = path.stem
+    m = _FILENAME_DATE_RE.search(name)
+    if m:
+        try:
+            Y, M, D, h, mi, s = (int(x) for x in m.groups())
+            return int(datetime(Y, M, D, h, mi, s).timestamp())
+        except ValueError:
+            pass
+    m = _FILENAME_DATEONLY_RE.search(name)
+    if m:
+        try:
+            Y, M, D = (int(x) for x in m.groups())
+            return int(datetime(Y, M, D).timestamp())
+        except ValueError:
+            pass
+    return None
+
+
 def extract_metadata(path: Path) -> tuple[int | None, float | None, float | None]:
-    """Return (taken_at_unix, lat, lon). Falls back: sidecar → EXIF → mtime."""
+    """Return (taken_at_unix, lat, lon).
+
+    Date priority:  EXIF DateTimeOriginal > sidecar photoTakenTime > filename > mtime
+    GPS priority:   EXIF GPS              > sidecar geoData
+    Sidecar dates are deprioritised because Google Takeout sometimes stamps
+    the export date instead of the original capture date (scan-date artifact).
+    """
     sidecar = _read_sidecar(path)
-    if sidecar:
-        taken_at = None
+    exif_date, exif_lat, exif_lon = _exif_metadata(path)
+
+    # --- Date ---
+    taken_at = exif_date  # EXIF first
+
+    if taken_at is None and sidecar:
         try:
             taken_at = int(sidecar['photoTakenTime']['timestamp'])
         except (KeyError, ValueError, TypeError):
             pass
 
-        lat, lon = None, None
+    if taken_at is None:
+        taken_at = _filename_date(path)  # e.g. PXL_20231224_040632
+
+    if taken_at is None:
+        taken_at = int(path.stat().st_mtime)
+
+    # --- GPS ---
+    lat, lon = exif_lat, exif_lon  # EXIF first
+
+    if lat is None and sidecar:
         try:
-            lat = float(sidecar['geoData']['latitude'])
-            lon = float(sidecar['geoData']['longitude'])
-            if lat == 0.0 and lon == 0.0:
-                lat, lon = None, None
+            slat = float(sidecar['geoData']['latitude'])
+            slon = float(sidecar['geoData']['longitude'])
+            if not (slat == 0.0 and slon == 0.0):
+                lat, lon = slat, slon
         except (KeyError, ValueError, TypeError):
             pass
 
-        if taken_at is not None:
-            return taken_at, lat, lon
-
-    taken_at, lat, lon = _exif_metadata(path)
-    if taken_at is not None:
-        return taken_at, lat, lon
-
-    return int(path.stat().st_mtime), None, None
+    return taken_at, lat, lon
 
 
 def reverse_geocode(lat: float, lon: float) -> str | None:

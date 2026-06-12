@@ -1,7 +1,23 @@
 from __future__ import annotations
 import math
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
+
+_GENERIC_ALBUMS = {'Trash', 'Untitled', 'no-date'}
+
+
+def _extract_album(path: str) -> str | None:
+    """Return the Google Photos album name from a path, or None if generic."""
+    parts = Path(path).parts
+    try:
+        gp_idx = next(i for i, p in enumerate(parts) if p == 'Google Photos')
+        album = parts[gp_idx + 1]
+        if album.startswith('Photos from') or album in _GENERIC_ALBUMS:
+            return None
+        return album
+    except (StopIteration, IndexError):
+        return None
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -71,7 +87,7 @@ def is_home_cluster(group: list[dict], home: tuple[float, float] | None,
         return False
     gps = [p for p in group if p['lat'] is not None]
     if not gps:
-        return True
+        return False  # no GPS = unknown location, treat as potential trip
     near = sum(1 for p in gps if haversine_km(p['lat'], p['lon'], home[0], home[1]) <= radius_km)
     return near / len(gps) >= threshold
 
@@ -93,17 +109,67 @@ def build_clusters(photos: list[dict], gap_days: int = 3, radius_km: float = 50.
     if not photos:
         return []
     gap_sec = gap_days * 86400
-    dated   = sorted([p for p in photos if p['taken_at'] is not None], key=lambda p: p['taken_at'])
-    undated = [p for p in photos if p['taken_at'] is None]
 
-    time_groups = time_gap_split(dated, gap_sec)
-    all_groups: list[list[dict]] = []
+    # --- Pass 1: group by named Google Photos album (hard constraint) ---
+    album_groups: dict[str, list[dict]] = defaultdict(list)
+    no_album: list[dict] = []
+    for p in photos:
+        album = _extract_album(p.get('path', ''))
+        if album:
+            album_groups[album].append(p)
+        else:
+            no_album.append(p)
+
+    # No-album photos go directly to date-based clustering.
+    # Album clusters are pure — only photos actually in that Google Photos album.
+    remaining = no_album
+
+    # --- Pass 3: time-gap + location cluster the remaining photos ---
+    dated_remaining = sorted([p for p in remaining if p['taken_at'] is not None],
+                             key=lambda p: p['taken_at'])
+    undated = [p for p in remaining if p['taken_at'] is None]
+
+    home = detect_home(
+        sorted([p for p in photos if p['taken_at'] is not None], key=lambda p: p['taken_at'])
+    )
+
+    time_groups = time_gap_split(dated_remaining, gap_sec)
+    date_groups: list[list[dict]] = []
     for g in time_groups:
-        all_groups.extend(location_split(g, radius_km))
+        date_groups.extend(location_split(g, radius_km))
 
-    home = detect_home(dated)
+    # --- Assemble clusters ---
     clusters = []
-    for cid, g in enumerate(all_groups, start=1):
+    cid = 1
+
+    # Album-based clusters (always trips)
+    for album, group in sorted(album_groups.items()):
+        dated = [p for p in group if p['taken_at'] is not None]
+        if not dated:
+            start_s = end_s = None
+            name = album
+        else:
+            start_ts = min(p['taken_at'] for p in dated)
+            end_ts   = max(p['taken_at'] for p in dated)
+            start_s, end_s = _fmt_date(start_ts), _fmt_date(end_ts)
+            name = album  # will be renamed in Phase 5
+        place = _dominant_place(group)
+        clusters.append({
+            "id":          cid,
+            "name":        name,
+            "album":       album,
+            "is_trip":     True,
+            "confirmed":   False,
+            "photo_count": len(group),
+            "photo_ids":   [p['id'] for p in group],
+            "start":       start_s,
+            "end":         end_s,
+            "place":       place,
+        })
+        cid += 1
+
+    # Date/location clusters
+    for g in date_groups:
         is_trip = not is_home_cluster(g, home)
         start_ts, end_ts = g[0]['taken_at'], g[-1]['taken_at']
         place = _dominant_place(g)
@@ -116,6 +182,7 @@ def build_clusters(photos: list[dict], gap_days: int = 3, radius_km: float = 50.
         clusters.append({
             "id":          cid,
             "name":        name,
+            "album":       None,
             "is_trip":     is_trip,
             "confirmed":   not is_trip,
             "photo_count": len(g),
@@ -124,11 +191,13 @@ def build_clusters(photos: list[dict], gap_days: int = 3, radius_km: float = 50.
             "end":         _fmt_date(end_ts),
             "place":       place,
         })
+        cid += 1
 
     if undated:
         clusters.append({
-            "id":          len(clusters) + 1,
+            "id":          cid,
             "name":        "no-date",
+            "album":       None,
             "is_trip":     False,
             "confirmed":   True,
             "photo_count": len(undated),
