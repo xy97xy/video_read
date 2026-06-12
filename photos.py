@@ -449,7 +449,7 @@ def cmd_describe(args):
             ).fetchall()
 
         if not rows:
-            print("✓ All photos already described. Use --force to re-describe.")
+            print("✓ Nothing left to describe. Use --force to re-describe.")
             return
 
         all_items = [{"id": r[0], "path": r[1]} for r in rows if Path(r[1]).exists()]

@@ -237,9 +237,6 @@ def test_cmd_describe_new_flags_in_help():
 
 def test_cmd_describe_video_writes_video_scenes(tmp_path):
     """Video rows are described and their scenes written to video_scenes table."""
-    import sys
-    from unittest.mock import patch
-
     real_video = tmp_path / "clip.mp4"
     real_video.write_bytes(b"fake video data")
 
@@ -288,11 +285,8 @@ def test_cmd_describe_video_writes_video_scenes(tmp_path):
     assert scene_rows[1] == (5.0, 10.0, "clouds drifting", 1.5)
 
 
-def test_cmd_describe_claude_provider_skips_videos(tmp_path):
+def test_cmd_describe_claude_provider_routes_videos_through_qwen(tmp_path):
     """--provider claude processes photos but routes videos through Qwen."""
-    import sys
-    from unittest.mock import patch
-
     real_photo = tmp_path / "photo.jpg"
     real_photo.write_bytes(b"fake jpeg")
     real_video = tmp_path / "clip.mp4"
