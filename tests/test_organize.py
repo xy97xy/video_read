@@ -71,8 +71,9 @@ def test_organize_collision_rename(tmp_path):
     out.mkdir()
     trip_dir = out / "Iceland-Trip-2024"
     trip_dir.mkdir()
-    # Pre-place a file with the same name as one of the photos
-    (trip_dir / "IMG_0000.jpg").write_bytes(b"existing")
+    # Pre-place a file with the generated name organize would produce for photo 1
+    # (taken_at=1704067200 → 20240101, seq=00000, cluster=Iceland-Trip-2024)
+    (trip_dir / "20240101-00000-Iceland-Trip-2024.jpg").write_bytes(b"existing")
 
     subprocess.run(
         [sys.executable, "photos.py", "organize",
@@ -81,5 +82,5 @@ def test_organize_collision_rename(tmp_path):
     )
     files = list(trip_dir.iterdir())
     names = {f.name for f in files}
-    assert "IMG_0000.jpg" in names
-    assert any("IMG_0000_2.jpg" in n for n in names)
+    assert "20240101-00000-Iceland-Trip-2024.jpg" in names
+    assert any("_dup" in n for n in names)

@@ -1,15 +1,16 @@
-import json, sqlite3, subprocess, sys, os
+import importlib.util, json, sqlite3, subprocess, sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 PROJ = os.path.dirname(os.path.dirname(__file__))
 DAY = 86400
 
+_spec = importlib.util.spec_from_file_location("photos_main", os.path.join(PROJ, "photos.py"))
+_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_mod)
+_init_db = _mod._init_db
+
 def _make_db(db_path, rows):
-    conn = sqlite3.connect(db_path)
-    conn.execute("""CREATE TABLE photos (
-        id INTEGER PRIMARY KEY, path TEXT UNIQUE,
-        taken_at INTEGER, lat REAL, lon REAL, place TEXT, cluster_id INTEGER
-    )""")
+    conn = _init_db(db_path)
     for r in rows:
         conn.execute("INSERT INTO photos (path,taken_at,lat,lon,place) VALUES (?,?,?,?,?)", r)
     conn.commit()

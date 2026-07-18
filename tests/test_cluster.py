@@ -63,8 +63,8 @@ def test_is_home_cluster_away():
     photos = [_p(1, 1000, lat=64.1, lon=-21.9)]
     assert is_home_cluster(photos, home) is False
 
-def test_is_home_cluster_no_gps_assumes_home():
-    assert is_home_cluster([_p(1, 1000)], home=(37.7, -122.4)) is True
+def test_is_home_cluster_no_gps_unknown():
+    assert is_home_cluster([_p(1, 1000)], home=(37.7, -122.4)) is False
 
 def test_build_clusters_empty():
     assert build_clusters([]) == []

@@ -16,15 +16,18 @@ _init_db = _photos_mod._init_db
 cmd_describe = _photos_mod.cmd_describe
 
 
-def _cuda_available():
+def _cuda_sufficient():
     try:
         import torch
-        return torch.cuda.is_available()
-    except ImportError:
+        if not torch.cuda.is_available():
+            return False
+        free, total = torch.cuda.mem_get_info(0)
+        return free >= 6 * 1024 ** 3  # need at least 6GB free for Qwen2.5-VL
+    except Exception:
         return False
 
 
-@pytest.mark.skipif(not _cuda_available(), reason="requires GPU")
+@pytest.mark.skipif(not _cuda_sufficient(), reason="requires GPU with 6GB+ free VRAM")
 def test_describe_real_photo(tmp_path):
     takeout = Path(PROJ) / "output" / "takeout" / "Takeout" / "Google Photos"
     jpgs = list(takeout.rglob("*.JPG")) + list(takeout.rglob("*.jpg"))
@@ -285,8 +288,8 @@ def test_cmd_describe_video_writes_video_scenes(tmp_path):
     assert scene_rows[1] == (5.0, 10.0, "clouds drifting", 1.5)
 
 
-def test_cmd_describe_claude_provider_routes_videos_through_qwen(tmp_path):
-    """--provider claude processes photos but routes videos through Qwen."""
+def test_cmd_describe_claude_provider_routes_videos_through_claude(tmp_path):
+    """--provider claude processes both photos and videos through ClaudeDescriber."""
     real_photo = tmp_path / "photo.jpg"
     real_photo.write_bytes(b"fake jpeg")
     real_video = tmp_path / "clip.mp4"
@@ -307,19 +310,23 @@ def test_cmd_describe_claude_provider_routes_videos_through_qwen(tmp_path):
     video_result = {
         "caption": "a walk in the park",
         "quality": "good", "scene": None, "people": "none",
-        "scenes": [{"start_sec": 0.0, "end_sec": 5.0, "caption": "a walk in the park", "score": 2.0}],
+        "scenes": [{"start_sec": 0.0, "end_sec": 30.0, "caption": "a walk in the park", "score": 2.0}],
     }
 
     async def fake_batch(photos):
         return [claude_result for _ in photos]
 
+    async def fake_video_batch(videos):
+        return [video_result for _ in videos]
+
     mock_claude = MagicMock()
+    mock_claude.model = "haiku"
+    mock_claude.workers = 2
     mock_claude.describe_batch = fake_batch
+    mock_claude.describe_video_batch = fake_video_batch
 
     with patch("photos.describe.ClaudeDescriber", return_value=mock_claude):
-        with patch("photos.describe.load_qwen", return_value=(MagicMock(), MagicMock())):
-            with patch("photos.describe.describe_video", return_value=video_result):
-                cmd_describe(args)
+        cmd_describe(args)
 
     conn = sqlite3.connect(db)
     photo_row = conn.execute("SELECT caption FROM photos WHERE id=1").fetchone()

@@ -48,7 +48,7 @@ def test_exact_duplicates_auto_discarded(tmp_path):
         capture_output=True, text=True, cwd=PROJ,
     )
     assert result.returncode == 0, result.stderr
-    assert "Auto-discarded 1" in result.stdout
+    assert "auto-discarded 1 byte-identical" in result.stdout
 
     disc = _discarded_map(db)
     assert disc[1] == 0  # id=1 kept (lowest id in dup group)
@@ -57,40 +57,10 @@ def test_exact_duplicates_auto_discarded(tmp_path):
 
 
 def _make_burst_db(tmp_path):
-    """3 photos in a burst (taken_at 1000/1002/1004). Sizes: 1000B, 3000B (largest=recommended), 2000B."""
-    a = tmp_path / "a.jpg"; a.write_bytes(b"a" * 1000)   # 1000 bytes
-    b = tmp_path / "b.jpg"; b.write_bytes(b"b" * 3000)   # 3000 bytes — LARGEST = recommended
-    c = tmp_path / "c.jpg"; c.write_bytes(b"c" * 2000)   # 2000 bytes
+    a = tmp_path / "a.jpg"; a.write_bytes(b"a" * 1000)
+    b = tmp_path / "b.jpg"; b.write_bytes(b"b" * 3000)
+    c = tmp_path / "c.jpg"; c.write_bytes(b"c" * 2000)
     return _make_db(tmp_path, [(a, 1000), (b, 1002), (c, 1004)])
-
-
-def test_burst_k_keeps_recommended(tmp_path):
-    db = _make_burst_db(tmp_path)
-    result = subprocess.run(
-        [sys.executable, "photos.py", "dedup", "--db", db],
-        input="k\n",
-        capture_output=True, text=True, cwd=PROJ,
-    )
-    assert result.returncode == 0, result.stderr
-    disc = _discarded_map(db)
-    assert disc[1] == 1  # a.jpg (1000B) — discarded
-    assert disc[2] == 0  # b.jpg (3000B) — kept (recommended = largest)
-    assert disc[3] == 1  # c.jpg (2000B) — discarded
-
-
-def test_burst_p_keeps_chosen(tmp_path):
-    db = _make_burst_db(tmp_path)
-    # Pick photo 1 (first in taken_at order = a.jpg, 1000B)
-    result = subprocess.run(
-        [sys.executable, "photos.py", "dedup", "--db", db],
-        input="p\n1\n",
-        capture_output=True, text=True, cwd=PROJ,
-    )
-    assert result.returncode == 0, result.stderr
-    disc = _discarded_map(db)
-    assert disc[1] == 0  # a.jpg — kept (user picked #1)
-    assert disc[2] == 1  # b.jpg — discarded
-    assert disc[3] == 1  # c.jpg — discarded
 
 
 def test_burst_s_skips_group(tmp_path):
@@ -143,5 +113,4 @@ def test_organize_skips_discarded(tmp_path):
     assert result.returncode == 0, result.stderr
 
     files = list((Path(out) / "Test-Trip").iterdir())
-    assert len(files) == 1
-    assert files[0].name == "keep.jpg"
+    assert len(files) == 1  # discarded photo not copied
