@@ -1364,7 +1364,7 @@ def main():
     r.add_argument("--yes", action="store_true", help="Auto-confirm all pending trips")
 
     o = sub.add_parser("organize", help="Copy photos into organised folders")
-    o.add_argument("--output-dir", required=True, metavar="DIR")
+    o.add_argument("--output-dir", default="output/final", metavar="DIR")
     o.add_argument("--db", default="photos.db", metavar="DB")
     o.add_argument("--clusters", default="clusters.json", metavar="FILE")
 
@@ -1424,8 +1424,8 @@ def main():
     et = sub.add_parser("export-takeout", help="Export organized photos as Google Takeout-style structure for re-upload")
     et.add_argument("--db", default="output/photos.db", metavar="DB")
     et.add_argument("--clusters", default="output/clusters.json", metavar="FILE")
-    et.add_argument("--organized-dir", default="output/organized", metavar="DIR")
-    et.add_argument("--output-dir", default="output/export", metavar="DIR")
+    et.add_argument("--organized-dir", default="output/final", metavar="DIR")
+    et.add_argument("--output-dir", default="output/final", metavar="DIR")
 
     ex = sub.add_parser("export-discarded", help="Copy discarded photos to a folder with manifest.csv")
     ex.add_argument("--db", default="photos.db", metavar="DB")

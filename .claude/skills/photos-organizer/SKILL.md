@@ -8,10 +8,10 @@ Organize a Google Photos Takeout export into descriptively named trip folders us
 
 When new photos arrive from any source, run the full intake pipeline in order:
 
-1. **Copy source files** into `output/takeout/` (unzip Google Takeout ZIPs, or copy iPhone camera roll folder)
+1. **Copy source files** into `output/input/` (unzip Google Takeout ZIPs, or copy iPhone camera roll folder)
 2. **Scan** to register new files in the DB (additive, safe to re-run):
    ```bash
-   venv/bin/python3 photos.py scan --takeout-dir output/takeout --db output/photos.db
+   venv/bin/python3 photos.py scan --takeout-dir output/input --db output/photos.db
    ```
 3. **Describe** new photos with Qwen (skips already-described):
    ```bash
@@ -32,9 +32,10 @@ When new photos arrive from any source, run the full intake pipeline in order:
    venv/bin/python3 photos.py cluster --db output/photos.db --output output/clusters.json
    ```
 7. **Name new clusters** — review Unsure clusters, assign trip names
-8. **Organize** — new photos get new hex sequence numbers appended to the global counter:
+8. **Organize** — copy photos into named trip folders in `output/final/`, then add sidecars:
    ```bash
-   venv/bin/python3 photos.py organize --db output/photos.db --output-dir output/organized --clusters output/clusters.json
+   venv/bin/python3 photos.py organize --db output/photos.db --output-dir output/final --clusters output/clusters.json
+   venv/bin/python3 photos.py export-takeout --db output/photos.db --clusters output/clusters.json --organized-dir output/final --output-dir output/final
    ```
    Sequence numbers are permanent and ever-increasing. Re-running organize never changes existing numbers.
 
@@ -75,7 +76,9 @@ Output layout:
 output/
   photos.db          ← all state (scan, describe, dedup, cluster)
   clusters.json      ← cluster assignments + trip names
-  organized/         ← named trip folders (photos + videos)
+  input/             ← raw source files (Google Takeout unzipped, iPhone camera roll)
+  final/             ← named trip folders ready to upload (photos + videos + sidecars)
+  leftovers/         ← not ready for upload: enhanced variants, unclustered monthly photos
   to-delete/         ← discarded copies awaiting manual deletion
     manifest.csv     ← why each file was discarded
 ```
@@ -100,7 +103,7 @@ This detects days where >50 photos share the same calendar date (likely a batch 
 ## Phase 1: Scan
 
 ```bash
-venv/bin/python3 photos.py scan --takeout-dir output/takeout --db output/photos.db
+venv/bin/python3 photos.py scan --takeout-dir output/input --db output/photos.db
 ```
 
 Safe to re-run — additive, skips already-scanned files. Run again after extracting new ZIPs.
@@ -131,7 +134,7 @@ print(f'Discarded {len(rows)} Trash photos')
 
 **ZIP extraction** (if raw ZIPs not yet extracted):
 ```bash
-unzip -n -d output/takeout <zipfile.zip>
+unzip -n -d output/input <zipfile.zip>
 # then re-run scan
 ```
 
@@ -195,7 +198,7 @@ After dedup, copy discarded files to staging folder with manifest:
 venv/bin/python3 photos.py export-discarded --db output/photos.db --output-dir output/to-delete
 ```
 
-Originals remain in `output/takeout/` — nothing is permanently deleted until you manually `rm` the to-delete folder.
+Originals remain in `output/input/` — nothing is permanently deleted until you manually `rm` the to-delete folder.
 
 **Verification**: every discarded photo traces back to a real kept copy on disk. To spot-check:
 ```python
@@ -306,50 +309,33 @@ print('clusters.json updated')
 
 ---
 
-## Phase 6: Organize
+## Phase 6 & 7: Organize + Export (merged into `output/final/`)
+
+Organize copies photos into named trip folders, then export-takeout adds sidecar `.json` files in-place so Google Photos preserves dates, GPS, captions, and album names on re-upload:
 
 ```bash
-venv/bin/python3 photos.py organize --db output/photos.db --output-dir output/organized --clusters output/clusters.json
-```
-
-Copies photos **and videos** into named trip folders. Non-trip clusters appear as `YYYY-MM` monthly folders. Organize is copy-based — originals stay in `output/takeout/`.
-
-Remove stale old-name folders if clusters were renamed:
-```bash
-# e.g. if Canada-Ski-Trip was renamed to Whistler-Ski-Trip:
-rm -rf output/organized/Canada-Ski-Trip
-```
-
----
-
-## Phase 7: Export for Google Photos re-upload
-
-Generate a Google Takeout-style export with sidecar `.json` metadata files so Google Photos preserves dates, GPS, captions, and album names on re-upload:
-
-```bash
-venv/bin/python3 photos.py export-takeout \
-  --db output/photos.db \
-  --clusters output/clusters.json \
-  --organized-dir output/organized \
-  --output-dir output/export
+venv/bin/python3 photos.py organize --db output/photos.db --output-dir output/final --clusters output/clusters.json
+venv/bin/python3 photos.py export-takeout --db output/photos.db --clusters output/clusters.json --organized-dir output/final --output-dir output/final
 ```
 
 Output structure:
 ```
-output/export/
+output/final/
   China-Trip-Oct-2024/
     20241023-00c1a-China-Trip-Oct-2024.JPG
     20241023-00c1a-China-Trip-Oct-2024.JPG.json   ← photoTakenTime, geoData, description
     ...
 ```
 
-Each sidecar `.json` contains:
-- `photoTakenTime` — original EXIF timestamp (not scan date)
-- `geoData` / `geoDataExif` — GPS coordinates from DB
-- `description` — Qwen caption
-- `albumData` — trip name as album
+Non-trip clusters (monthly dumps) go to `output/leftovers/`. Google-enhanced/_compare variants also go to `output/leftovers/` — not ready for upload.
 
-**To re-upload**: zip each album folder and upload via Google Photos web UI, or use a bulk uploader that respects Takeout JSON sidecars (e.g. `gphotos-uploader-cli`).
+Remove stale old-name folders if clusters were renamed:
+```bash
+# e.g. if Canada-Ski-Trip was renamed to Whistler-Ski-Trip:
+rm -rf output/final/Canada-Ski-Trip
+```
+
+**To re-upload**: zip each album folder in `output/final/` and upload via Google Photos web UI, or use `gphotos-uploader-cli`.
 
 ---
 
@@ -358,7 +344,7 @@ Each sidecar `.json` contains:
 Videos are organized into trip folders alongside photos. To make a highlight reel for a specific trip, use the **video-highlight-pipeline** skill interactively.
 
 General flow:
-1. Identify which trip folder has interesting video footage: `ls output/organized/<Trip-Name>/`
+1. Identify which trip folder has interesting video footage: `ls output/final/<Trip-Name>/`
 2. Invoke `/photos-organizer` → hand off to `video-highlight-pipeline` for that folder
 3. Pipeline: batch describe → Claude selects best chunks → cut reel
 
@@ -369,16 +355,16 @@ Do NOT batch-describe all 500+ videos upfront — only process the trips you act
 ## Phase 8: Summary and data safety
 
 Report to user:
-- Named trip folders: `ls output/organized/ | grep -v "^20"`
-- Total files organized: `find output/organized -type f | wc -l`
+- Named trip folders: `ls output/final/ | grep -v "^20"`
+- Total files organized: `find output/final -type f | wc -l`
 - Files in to-delete: `wc -l output/to-delete/manifest.csv`
 
 **Data safety rules — NEVER auto-delete photos**:
 - ❌ Never run `rm`, `unlink`, or any destructive command on original photo files
-- ❌ Never delete from `output/takeout/` — it is the permanent source of truth
+- ❌ Never delete from `output/input/` — it is the permanent source of truth
 - ✅ Discarded photos go to `output/to-delete/` as copies — user reviews and deletes manually
-- ✅ `output/organized/` is copies — safe to regenerate by re-running organize
-- ✅ Keep Google Takeout ZIPs in Downloads until all photos confirmed in organized/
+- ✅ `output/final/` is copies — safe to regenerate by re-running organize
+- ✅ Keep Google Takeout ZIPs in Downloads until all photos confirmed in output/final/
 - ✅ Back up `clusters.json` before every re-cluster run
 
 The pipeline is copy-only. The user manually deletes `output/to-delete/` after review — Claude never does this automatically.

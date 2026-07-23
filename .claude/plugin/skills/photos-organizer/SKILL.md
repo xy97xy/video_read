@@ -1,13 +1,62 @@
 # Photos Organizer
 
-Organize a Google Photos Takeout export into descriptively named trip folders using a 7-phase pipeline. Claude runs commands, reads output, and names clusters from Qwen captions.
+Organize a Google Photos Takeout export into descriptively named trip folders using a pipeline. Claude runs commands, reads output, and names clusters from Google album names + Qwen captions. Videos cluster alongside photos by date; highlight reels are a separate per-trip step.
+
+---
+
+## Intake: New Photos (Google Takeout or iPhone)
+
+When new photos arrive from any source, run the full intake pipeline in order:
+
+1. **Copy source files** into `output/input/` (unzip Google Takeout ZIPs, or copy iPhone camera roll folder)
+2. **Scan** to register new files in the DB (additive, safe to re-run):
+   ```bash
+   venv/bin/python3 photos.py scan --takeout-dir output/input --db output/photos.db
+   ```
+3. **Describe** new photos with Qwen (skips already-described):
+   ```bash
+   export LD_LIBRARY_PATH="..."
+   nohup venv/bin/python3 photos.py describe --db output/photos.db > /tmp/describe.log 2>&1 &
+   ```
+4. **Auto-junk** to discard receipts, black frames, screenshots:
+   ```bash
+   venv/bin/python3 photos.py auto-junk --db output/photos.db --to-delete-dir output/to-delete
+   ```
+5. **Dedup** to remove exact and visual duplicates:
+   ```bash
+   venv/bin/python3 photos.py dedup --db output/photos.db
+   ```
+6. **Re-cluster** (back up first!):
+   ```bash
+   cp output/clusters.json output/clusters.backup.json
+   venv/bin/python3 photos.py cluster --db output/photos.db --output output/clusters.json
+   ```
+7. **Name new clusters** — review Unsure clusters, assign trip names
+8. **Organize** — copy photos into named trip folders in `output/final/`, then add sidecars:
+   ```bash
+   venv/bin/python3 photos.py organize --db output/photos.db --output-dir output/final --clusters output/clusters.json
+   venv/bin/python3 photos.py export-takeout --db output/photos.db --clusters output/clusters.json --organized-dir output/final --output-dir output/final
+   ```
+   Sequence numbers are permanent and ever-increasing. Re-running organize never changes existing numbers.
+
+9. **Review discards** with the paired contact sheet:
+   ```bash
+   venv/bin/python3 photos.py show-discards --db output/photos.db --page 1
+   ```
+
+**File naming convention**: `YYYYMMDD-{5-hex-seq}-Trip-Name.ext`
+- Date from EXIF taken_at (UTC)
+- Hex sequence: global chronological counter, unique forever
+- Example: `20241024-001c6-China-Trip-Oct-2024.JPG`
+
+---
 
 ## Prerequisites
 
 Check before starting:
 
 ```bash
-ls venv/bin/activate
+ls /scratch/video_read/venv/bin/activate
 ```
 
 If missing:
@@ -15,110 +64,178 @@ If missing:
 bash setup_venv.sh
 ```
 
-Ask the user: path to their extracted Google Takeout directory.
-
 Working directory for all commands: `/scratch/video_read`
 
-Run `source venv/bin/activate` at the start of every new shell session before any phase. The activation persists within a session — you only need to do this once per session.
+Use full venv path — do NOT `source venv/bin/activate` in background/nohup commands, it doesn't propagate:
+```bash
+/scratch/video_read/venv/bin/python3 photos.py <command>
+```
 
 Output layout:
 ```
 output/
-  photos.db          ← scan + describe state
-  clusters.json      ← cluster + naming state
-  organized/         ← named trip folders
-  to-delete/         ← discarded photos awaiting review
+  photos.db          ← all state (scan, describe, dedup, cluster)
+  clusters.json      ← cluster assignments + trip names
+  input/             ← raw source files (Google Takeout unzipped, iPhone camera roll)
+  final/             ← named trip folders ready to upload (photos + videos + sidecars)
+  leftovers/         ← not ready for upload: enhanced variants, unclustered monthly photos
+  to-delete/         ← discarded copies awaiting manual deletion
+    manifest.csv     ← why each file was discarded
 ```
+
+---
+
+## Metadata priority
+
+Date: **EXIF DateTimeOriginal → sidecar photoTakenTime → filename (PXL_YYYYMMDD) → mtime**
+GPS:  **EXIF GPS → sidecar geoData**
+
+Sidecar is deprioritised for dates because Google Takeout stamps the export date when it can't read EXIF (scan-date artifact). EXIF is the original camera timestamp and is more reliable.
+
+After scanning, run `fix-dates` to repair any photos already in the DB with scan-date artifacts:
+```bash
+venv/bin/python3 photos.py fix-dates --db output/photos.db
+```
+This detects days where >50 photos share the same calendar date (likely a batch scan stamp), re-extracts their dates from EXIF/filename, and updates the DB. Safe to re-run.
 
 ---
 
 ## Phase 1: Scan
 
 ```bash
-source venv/bin/activate
-python photos.py scan --takeout-dir <dir> --db output/photos.db
+venv/bin/python3 photos.py scan --takeout-dir output/input --db output/photos.db
 ```
 
-Report to user: total photos found, how many have GPS, how many have dates. Then proceed.
+Safe to re-run — additive, skips already-scanned files. Run again after extracting new ZIPs.
+
+Report: total photos+videos found, how many have GPS, how many have dates.
+
+**Trash folder**: Google Takeout includes a `Trash/` folder of photos the user already deleted. After scanning, immediately discard them:
+```bash
+python3 -c "
+import sqlite3, shutil
+from pathlib import Path
+conn = sqlite3.connect('output/photos.db')
+to_delete = Path('output/to-delete')
+to_delete.mkdir(exist_ok=True)
+rows = conn.execute(\"SELECT id, path FROM photos WHERE discarded=0 AND path LIKE '%/Trash/%'\").fetchall()
+for pid, path in rows:
+    src = Path(path)
+    if src.exists():
+        dest = to_delete / src.name
+        if dest.exists():
+            dest = to_delete / (src.stem + f'_{pid}' + src.suffix)
+        shutil.copy2(src, dest)
+    conn.execute('UPDATE photos SET discarded=1, discard_reason=\"google-trash\" WHERE id=?', (pid,))
+conn.commit()
+print(f'Discarded {len(rows)} Trash photos')
+"
+```
+
+**ZIP extraction** (if raw ZIPs not yet extracted):
+```bash
+unzip -n -d output/input <zipfile.zip>
+# then re-run scan
+```
 
 ---
 
 ## Phase 2: Describe
 
+Qwen2.5-VL 7B describes every undescribed, non-discarded photo (not videos — those are handled separately at reel time). Run in background with nohup so it survives session close:
+
 ```bash
-python photos.py describe --db output/photos.db
+export LD_LIBRARY_PATH="/home/xiaoyu/Scripts/python/.venv/lib/python3.13/site-packages/nvidia/cublas/lib:${LD_LIBRARY_PATH:-}"
+nohup venv/bin/python3 photos.py describe --db output/photos.db > /tmp/describe.log 2>&1 &
+echo "PID: $!"
 ```
 
-Runs Qwen2.5-VL on all undescribed photos (~12s each on GPU). Already-described photos are skipped — safe to re-run after interruption.
+Check progress: `grep -oE "[0-9]+/[0-9]+" /tmp/describe.log | tail -1`
 
-Report: count described. Then proceed.
+Already-described photos are skipped — safe to re-run after interruption.
 
-If Qwen crashes mid-run and a photo has corrupt data, clear it and re-run:
-```sql
-UPDATE photos SET caption=NULL, quality=NULL, scene=NULL, people=NULL, described_at=NULL WHERE id=<id>;
+**VRAM management**: Qwen uses ~6-7GB of the 8GB GPU. If OOM:
+```bash
+# Find stale process holding VRAM
+fuser /dev/nvidia0 2>/dev/null | tr ' ' '\n' | xargs -I{} ps -p {} --no-headers -o pid,cmd 2>/dev/null | grep python
+kill -9 <PID>
+nvidia-smi --query-gpu=memory.used,memory.free --format=csv,noheader  # verify freed
+# then restart
 ```
-Then re-run `photos.py describe` — it will re-process that photo.
+
+---
+
+## Phase 2b: Auto-junk
+
+After describe, automatically discard receipts, documents, black/blank frames, accidental shots, and screenshots based on Qwen captions:
+
+```bash
+venv/bin/python3 photos.py auto-junk --db output/photos.db --to-delete-dir output/to-delete
+```
+
+Detected categories:
+- **Receipts/documents**: receipt, invoice, bill total, payment due, handwritten note, text on paper, form
+- **Bad frames**: all black, completely black, blank, accidental, out of focus, blurry, lens cap, finger/hand covering
+- **Screenshots**: screenshot, screen capture, screen recording
+
+Copies originals to `output/to-delete/` and sets `discard_reason='auto-junk'`. Safe to re-run. Only works after `describe` has run.
 
 ---
 
 ## Phase 3: Dedup
 
-**Python finds, Claude decides. No auto-discards.**
+Fully automated — two passes, no Claude review needed:
 
 ```bash
-python photos.py dedup --db output/photos.db --report output/burst-groups.json
+venv/bin/python3 photos.py dedup --db output/photos.db
 ```
 
-Python handles two passes:
-- **Exact duplicates** — auto-discarded immediately, keeping whichever copy has been described by Qwen (falls back to lower ID). No judgment needed — identical bytes.
-- **Burst groups** — written to `output/burst-groups.json` for Claude to review
+- **Pass 1**: Byte-identical duplicates auto-discarded. Keeps whichever copy has a Qwen description; falls back to lower ID. Videos are never touched.
+- **Pass 2**: Visually identical (pHash) duplicates auto-discarded. Catches Google Photos `_enhanced` and `_compare` variants.
 
-**Claude reads the report and decides** which photo to keep in each group. All photos are already described by Qwen from Phase 2 — use captions, quality, and scene to make the call. Videos are never included.
+After dedup, copy discarded files to staging folder with manifest:
+```bash
+venv/bin/python3 photos.py export-discarded --db output/photos.db --output-dir output/to-delete
+```
 
-Key rules:
-- ⚠️ Any group with `"warning"` set (10+ photos) is a metadata artifact — Google Takeout sometimes stamps all `taken_at` with the scan date. **Skip these entirely** (omit from picks).
-- For burst shots: pick the sharpest / best composed based on caption and quality. Look at actual image content — captions from Qwen are available for all photos.
+Originals remain in `output/input/` — nothing is permanently deleted until you manually `rm` the to-delete folder.
 
-Build picks and apply:
-
+**Verification**: every discarded photo traces back to a real kept copy on disk. To spot-check:
 ```python
-import json
-picks = [
-    {"type": "exact_duplicate", "keep_id": <id>, "keep_name": "<filename>", "discard_ids": [<id>, ...]},
-    {"type": "burst", "keep_id": <id>, "keep_name": "<filename>", "discard_ids": [<id>, ...]},
-    # one entry per group — omit groups where all photos should be kept
-]
-with open("output/burst-picks.json", "w") as f:
-    json.dump(picks, f, indent=2)
+import hashlib, sqlite3
+def md5(p):
+    h = hashlib.md5()
+    with open(p,'rb') as f:
+        for c in iter(lambda: f.read(65536), b''): h.update(c)
+    return h.hexdigest()
+# compare md5(discarded_path) == md5(kept_path)
 ```
-
-```bash
-python photos.py dedup --apply output/burst-picks.json
-```
-
-Then copy discarded photos to `output/to-delete/` with a manifest:
-
-```bash
-python photos.py export-discarded --db output/photos.db --output-dir output/to-delete
-```
-
-Originals remain untouched in the Takeout directory. Then proceed.
 
 ---
 
 ## Phase 4: Cluster
 
+⚠️ **ALWAYS back up clusters.json before re-clustering** — re-clustering overwrites all named trips:
 ```bash
-python photos.py cluster --db output/photos.db --output output/clusters.json
+cp output/clusters.json output/clusters.backup.json
 ```
 
-Report: number of trip clusters found. Then proceed.
+```bash
+venv/bin/python3 photos.py cluster --db output/photos.db --output output/clusters.json
+```
 
-If 0 trip clusters are found, all photos may be near the detected home location, or timestamps/GPS may be missing. Check with: `SELECT COUNT(*), SUM(taken_at IS NULL), SUM(lat IS NULL) FROM photos;`
+The `--force` flag is required if confirmed trip names already exist in clusters.json (prevents silent overwrite).
+
+Videos are included automatically — they have `taken_at` timestamps and cluster alongside their trip photos.
+
+If 0 trip clusters found, check timestamps/GPS:
+```sql
+SELECT COUNT(*), SUM(taken_at IS NULL), SUM(lat IS NULL) FROM photos WHERE discarded=0;
+```
 
 ---
 
-## Phase 5: Claude names clusters
+## Phase 5: Name clusters
 
 Read album names, captions and scenes from the DB for each trip cluster:
 
@@ -140,7 +257,6 @@ for c in clusters:
         WHERE id IN ({placeholders}) AND discarded=0
     ''', ids).fetchall()
 
-    # Extract Google Photos album names from paths
     albums = []
     for path, *_ in rows:
         parts = Path(path).parts
@@ -162,23 +278,26 @@ for c in clusters:
     print()
 ```
 
-Use **album names first** — they're user-created and most reliable (e.g. `China-10-18-24` → "China Trip", `Whistler` → "Whistler Ski Trip"). Fall back to Qwen captions and scenes when albums are generic (`Photos from YYYY`) or absent. Clusters with no usable signal keep their date-range name.
+**Naming priority**:
+1. **Google Photos album names** — user-created, most reliable (e.g. `China-10-18-24` → "China Trip", `EU Invasion 7-2025` → "Europe Trip July 2025", `Whistler` → "Whistler Ski Trip")
+2. **Qwen captions + scene** — fall back when album is generic (`Photos from YYYY`) or absent
+3. **If unsure** — name the cluster `"Unsure-<date-range>"` and present it to the user for manual naming. Never guess a trip name when the signal is weak.
 
-Show the user a table of proposed names and wait for confirmation:
+Show user a confirmation table:
 
-| Cluster | Date Range | Proposed Name |
-|---------|------------|---------------|
-| 11 | 2024-10-23–2024-11-01 | China Trip |
-| 16 | 2025-02-23–2025-02-24 | Canada Ski Trip |
-| ... | ... | ... |
+| Cluster | Date Range | Album | Proposed Name |
+|---------|------------|-------|---------------|
+| 11 | 2024-10-23–2024-11-01 | China-10-18-24 | China Trip |
+| 16 | 2025-07-01–2025-07-14 | EU Invasion 7-2025 | Europe Trip July 2025 |
+| 22 | 2025-09-04–2025-09-06 | Photos from 2025 | Unsure-2025-09-04 |
 
-After the user confirms the table, construct `name_map` as a Python dict with integer cluster IDs as keys and confirmed name strings as values, then run:
+After confirmation, apply names:
 
 ```python
-# After user confirms the name table above, fill name_map with confirmed names:
 name_map = {
-    # e.g. 11: 'China Trip', 16: 'Canada Ski Trip'
-    # Fill with integer cluster ID → confirmed name string for each renamed cluster
+    11: 'China Trip',
+    16: 'Europe Trip July 2025',
+    # integer cluster ID → confirmed name
 }
 for c in clusters:
     if c['id'] in name_map:
@@ -190,51 +309,62 @@ print('clusters.json updated')
 
 ---
 
-## Phase 6: Organize
+## Phase 6 & 7: Organize + Export (merged into `output/final/`)
+
+Organize copies photos into named trip folders, then export-takeout adds sidecar `.json` files in-place so Google Photos preserves dates, GPS, captions, and album names on re-upload:
 
 ```bash
-python photos.py organize --db output/photos.db --output-dir output/organized --clusters output/clusters.json
+venv/bin/python3 photos.py organize --db output/photos.db --output-dir output/final --clusters output/clusters.json
+venv/bin/python3 photos.py export-takeout --db output/photos.db --clusters output/clusters.json --organized-dir output/final --output-dir output/final
 ```
 
-Non-trip clusters (home/everyday photos) are organized into monthly folders by `organize` automatically — they appear as `YYYY-MM` folders alongside the named trip folders.
-
-After organizing, remove leftover date-only folders that were replaced by named ones. To identify them: any folder in `output/organized/` whose name matches the pattern `YYYY-MM-DD-YYYY-MM-DD` and whose cluster now has a descriptive name.
-
-```python
-import re, shutil, json
-from pathlib import Path
-
-clusters = json.loads(Path('output/clusters.json').read_text())
-date_range_re = re.compile(r'^\d{4}-\d{2}-\d{2}')
-
-# Derive old date-folder names only for clusters that were renamed to a descriptive name
-old_date_folders = set()
-for c in clusters:
-    if c.get('is_trip') and c.get('start') and c.get('end'):
-        if not date_range_re.match(c['name']):  # name was changed from date-range to descriptive
-            old_date_folders.add(f"{c['start']}-{c['end']}")
-
-removed = []
-for folder in Path('output/organized').iterdir():
-    if folder.is_dir() and folder.name in old_date_folders:
-        shutil.rmtree(folder)
-        removed.append(folder.name)
-print(f'Removed {len(removed)} old date folders: {removed}')
+Output structure:
+```
+output/final/
+  China-Trip-Oct-2024/
+    20241023-00c1a-China-Trip-Oct-2024.JPG
+    20241023-00c1a-China-Trip-Oct-2024.JPG.json   ← photoTakenTime, geoData, description
+    ...
 ```
 
-Report the final folder list to the user:
+Non-trip clusters (monthly dumps) go to `output/leftovers/`. Google-enhanced/_compare variants also go to `output/leftovers/` — not ready for upload.
+
+Remove stale old-name folders if clusters were renamed:
 ```bash
-ls output/organized/
+# e.g. if Canada-Ski-Trip was renamed to Whistler-Ski-Trip:
+rm -rf output/final/Canada-Ski-Trip
 ```
-Then proceed to Phase 7.
+
+**To re-upload**: zip each album folder in `output/final/` and upload via Google Photos web UI, or use `gphotos-uploader-cli`.
 
 ---
 
-## Phase 7: Summary
+## Phase 8: Videos — highlight reels (per trip, on demand)
+
+Videos are organized into trip folders alongside photos. To make a highlight reel for a specific trip, use the **video-highlight-pipeline** skill interactively.
+
+General flow:
+1. Identify which trip folder has interesting video footage: `ls output/final/<Trip-Name>/`
+2. Invoke `/photos-organizer` → hand off to `video-highlight-pipeline` for that folder
+3. Pipeline: batch describe → Claude selects best chunks → cut reel
+
+Do NOT batch-describe all 500+ videos upfront — only process the trips you actually want reels for.
+
+---
+
+## Phase 8: Summary and data safety
 
 Report to user:
-- Number of named folders in `output/organized/`
-- Total photos in organized folders: `find output/organized -type f | wc -l`
-- Number of photos in `output/to-delete/` awaiting review
+- Named trip folders: `ls output/final/ | grep -v "^20"`
+- Total files organized: `find output/final -type f | wc -l`
+- Files in to-delete: `wc -l output/to-delete/manifest.csv`
 
-Remind user: **review `output/to-delete/` and delete manually when satisfied. Nothing is auto-deleted.**
+**Data safety rules — NEVER auto-delete photos**:
+- ❌ Never run `rm`, `unlink`, or any destructive command on original photo files
+- ❌ Never delete from `output/input/` — it is the permanent source of truth
+- ✅ Discarded photos go to `output/to-delete/` as copies — user reviews and deletes manually
+- ✅ `output/final/` is copies — safe to regenerate by re-running organize
+- ✅ Keep Google Takeout ZIPs in Downloads until all photos confirmed in output/final/
+- ✅ Back up `clusters.json` before every re-cluster run
+
+The pipeline is copy-only. The user manually deletes `output/to-delete/` after review — Claude never does this automatically.
