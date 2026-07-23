@@ -58,6 +58,7 @@ Chunks are always concatenated in chronological order regardless of selection or
 ## VRAM Notes
 
 - Qwen 7B 4-bit uses ~5-6GB VRAM on RTX 3070
+- **GPU cap: `load_qwen()` in `pipeline.py` sets `max_memory={0: "6144MiB"}` (75% of 8 GB) by default.** Do not remove this — running at 100% GPU caused the worker to crash.
 - Always run with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` if OOM
 - Previous model must be fully unloaded before reloading (restart Python process)
 

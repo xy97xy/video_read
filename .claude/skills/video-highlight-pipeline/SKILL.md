@@ -133,6 +133,7 @@ Speech-aware cutting is on by default: if a chunk boundary falls mid-sentence, t
 ## VRAM Notes
 
 - Qwen 7B 4-bit uses ~5-6GB VRAM — fits on RTX 3070
+- **GPU cap: `load_qwen()` in `pipeline.py` sets `max_memory={0: "6144MiB"}` (75% of 8 GB) by default.** Do not remove this — running at 100% GPU caused the worker to crash.
 - `expandable_segments` is already set inside `pipeline.py`
 - If OOM: restart the Python process to fully clear VRAM
 - faster-whisper uses ~500MB on GPU (CUDA 12 cublas path is baked into `venv/bin/activate`)

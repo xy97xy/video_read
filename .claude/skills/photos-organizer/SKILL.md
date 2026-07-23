@@ -2,6 +2,54 @@
 
 Organize a Google Photos Takeout export into descriptively named trip folders using a pipeline. Claude runs commands, reads output, and names clusters from Google album names + Qwen captions. Videos cluster alongside photos by date; highlight reels are a separate per-trip step.
 
+---
+
+## Intake: New Photos (Google Takeout or iPhone)
+
+When new photos arrive from any source, run the full intake pipeline in order:
+
+1. **Copy source files** into `output/takeout/` (unzip Google Takeout ZIPs, or copy iPhone camera roll folder)
+2. **Scan** to register new files in the DB (additive, safe to re-run):
+   ```bash
+   venv/bin/python3 photos.py scan --takeout-dir output/takeout --db output/photos.db
+   ```
+3. **Describe** new photos with Qwen (skips already-described):
+   ```bash
+   export LD_LIBRARY_PATH="..."
+   nohup venv/bin/python3 photos.py describe --db output/photos.db > /tmp/describe.log 2>&1 &
+   ```
+4. **Auto-junk** to discard receipts, black frames, screenshots:
+   ```bash
+   venv/bin/python3 photos.py auto-junk --db output/photos.db --to-delete-dir output/to-delete
+   ```
+5. **Dedup** to remove exact and visual duplicates:
+   ```bash
+   venv/bin/python3 photos.py dedup --db output/photos.db
+   ```
+6. **Re-cluster** (back up first!):
+   ```bash
+   cp output/clusters.json output/clusters.backup.json
+   venv/bin/python3 photos.py cluster --db output/photos.db --output output/clusters.json
+   ```
+7. **Name new clusters** — review Unsure clusters, assign trip names
+8. **Organize** — new photos get new hex sequence numbers appended to the global counter:
+   ```bash
+   venv/bin/python3 photos.py organize --db output/photos.db --output-dir output/organized --clusters output/clusters.json
+   ```
+   Sequence numbers are permanent and ever-increasing. Re-running organize never changes existing numbers.
+
+9. **Review discards** with the paired contact sheet:
+   ```bash
+   venv/bin/python3 photos.py show-discards --db output/photos.db --page 1
+   ```
+
+**File naming convention**: `YYYYMMDD-{5-hex-seq}-Trip-Name.ext`
+- Date from EXIF taken_at (UTC)
+- Hex sequence: global chronological counter, unique forever
+- Example: `20241024-001c6-China-Trip-Oct-2024.JPG`
+
+---
+
 ## Prerequisites
 
 Check before starting:
@@ -59,6 +107,28 @@ Safe to re-run — additive, skips already-scanned files. Run again after extrac
 
 Report: total photos+videos found, how many have GPS, how many have dates.
 
+**Trash folder**: Google Takeout includes a `Trash/` folder of photos the user already deleted. After scanning, immediately discard them:
+```bash
+python3 -c "
+import sqlite3, shutil
+from pathlib import Path
+conn = sqlite3.connect('output/photos.db')
+to_delete = Path('output/to-delete')
+to_delete.mkdir(exist_ok=True)
+rows = conn.execute(\"SELECT id, path FROM photos WHERE discarded=0 AND path LIKE '%/Trash/%'\").fetchall()
+for pid, path in rows:
+    src = Path(path)
+    if src.exists():
+        dest = to_delete / src.name
+        if dest.exists():
+            dest = to_delete / (src.stem + f'_{pid}' + src.suffix)
+        shutil.copy2(src, dest)
+    conn.execute('UPDATE photos SET discarded=1, discard_reason=\"google-trash\" WHERE id=?', (pid,))
+conn.commit()
+print(f'Discarded {len(rows)} Trash photos')
+"
+```
+
 **ZIP extraction** (if raw ZIPs not yet extracted):
 ```bash
 unzip -n -d output/takeout <zipfile.zip>
@@ -89,6 +159,23 @@ kill -9 <PID>
 nvidia-smi --query-gpu=memory.used,memory.free --format=csv,noheader  # verify freed
 # then restart
 ```
+
+---
+
+## Phase 2b: Auto-junk
+
+After describe, automatically discard receipts, documents, black/blank frames, accidental shots, and screenshots based on Qwen captions:
+
+```bash
+venv/bin/python3 photos.py auto-junk --db output/photos.db --to-delete-dir output/to-delete
+```
+
+Detected categories:
+- **Receipts/documents**: receipt, invoice, bill total, payment due, handwritten note, text on paper, form
+- **Bad frames**: all black, completely black, blank, accidental, out of focus, blurry, lens cap, finger/hand covering
+- **Screenshots**: screenshot, screen capture, screen recording
+
+Copies originals to `output/to-delete/` and sets `discard_reason='auto-junk'`. Safe to re-run. Only works after `describe` has run.
 
 ---
 
@@ -235,7 +322,38 @@ rm -rf output/organized/Canada-Ski-Trip
 
 ---
 
-## Phase 7: Videos — highlight reels (per trip, on demand)
+## Phase 7: Export for Google Photos re-upload
+
+Generate a Google Takeout-style export with sidecar `.json` metadata files so Google Photos preserves dates, GPS, captions, and album names on re-upload:
+
+```bash
+venv/bin/python3 photos.py export-takeout \
+  --db output/photos.db \
+  --clusters output/clusters.json \
+  --organized-dir output/organized \
+  --output-dir output/export
+```
+
+Output structure:
+```
+output/export/
+  China-Trip-Oct-2024/
+    20241023-00c1a-China-Trip-Oct-2024.JPG
+    20241023-00c1a-China-Trip-Oct-2024.JPG.json   ← photoTakenTime, geoData, description
+    ...
+```
+
+Each sidecar `.json` contains:
+- `photoTakenTime` — original EXIF timestamp (not scan date)
+- `geoData` / `geoDataExif` — GPS coordinates from DB
+- `description` — Qwen caption
+- `albumData` — trip name as album
+
+**To re-upload**: zip each album folder and upload via Google Photos web UI, or use a bulk uploader that respects Takeout JSON sidecars (e.g. `gphotos-uploader-cli`).
+
+---
+
+## Phase 8: Videos — highlight reels (per trip, on demand)
 
 Videos are organized into trip folders alongside photos. To make a highlight reel for a specific trip, use the **video-highlight-pipeline** skill interactively.
 

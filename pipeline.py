@@ -92,7 +92,8 @@ def load_qwen():
     )
     processor = AutoProcessor.from_pretrained(QWEN_MODEL)
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-        QWEN_MODEL, quantization_config=bnb, device_map="cuda:0"
+        QWEN_MODEL, quantization_config=bnb, device_map="cuda:0",
+        max_memory={0: "6144MiB"},
     )
     model.eval()
     log.info("qwen loaded")
@@ -175,6 +176,8 @@ def describe_chunk(model, processor, seg_path: str, start: float, end: float) ->
     with torch.no_grad():
         outputs = model.generate(**inputs, max_new_tokens=300, do_sample=False)
     decoded = processor.decode(outputs[0], skip_special_tokens=True)
+    del inputs, outputs
+    torch.cuda.empty_cache()
     for marker in ("assistant\n", "Assistant: ", "assistant: "):
         if marker in decoded:
             decoded = decoded.split(marker, 1)[1].strip()
