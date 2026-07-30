@@ -34,6 +34,16 @@ QWEN_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
 MAX_CHUNK_SECONDS = 10
 SCENE_FPS = 25
 
+_transnet_model: TransNetV2 | None = None
+
+
+def _get_transnet() -> TransNetV2:
+    global _transnet_model
+    if _transnet_model is None:
+        _transnet_model = TransNetV2(device="cpu")
+        _transnet_model.eval()
+    return _transnet_model
+
 
 # ---------------------------------------------------------------------------
 # Stage 1: scene detection
@@ -41,8 +51,7 @@ SCENE_FPS = 25
 
 def detect_scenes(video_path: str, threshold: float = 0.5, duration: float | None = None) -> list[dict]:
     log.info("detecting scenes with TransNetV2...")
-    model = TransNetV2()
-    model.eval()
+    model = _get_transnet()
     _, predictions, _ = model.predict_video(video_path)
     preds = predictions.numpy()
 

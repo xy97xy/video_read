@@ -13,10 +13,9 @@ When new photos arrive from any source, run the full intake pipeline in order:
    ```bash
    venv/bin/python3 photos.py scan --takeout-dir output/input --db output/photos.db
    ```
-3. **Describe** new photos with Qwen (skips already-described):
+3. **Describe** new photos and videos with Qwen (skips already-described):
    ```bash
-   export LD_LIBRARY_PATH="..."
-   nohup venv/bin/python3 photos.py describe --db output/photos.db > /tmp/describe.log 2>&1 &
+   nohup venv/bin/python3 photos.py describe --db output/photos.db >> ~/qwen_describe.log 2>&1 &
    ```
 4. **Auto-junk** to discard receipts, black frames, screenshots:
    ```bash
@@ -142,25 +141,21 @@ unzip -n -d output/input <zipfile.zip>
 
 ## Phase 2: Describe
 
-Qwen2.5-VL 7B describes every undescribed, non-discarded photo (not videos — those are handled separately at reel time). Run in background with nohup so it survives session close:
+Qwen2.5-VL 7B describes every undescribed, non-discarded photo **and video**. Run in background with nohup so it survives session close:
 
 ```bash
-export LD_LIBRARY_PATH="/home/xiaoyu/Scripts/python/.venv/lib/python3.13/site-packages/nvidia/cublas/lib:${LD_LIBRARY_PATH:-}"
-nohup venv/bin/python3 photos.py describe --db output/photos.db > /tmp/describe.log 2>&1 &
+nohup venv/bin/python3 photos.py describe --db output/photos.db >> ~/qwen_describe.log 2>&1 &
 echo "PID: $!"
 ```
 
-Check progress: `grep -oE "[0-9]+/[0-9]+" /tmp/describe.log | tail -1`
+Check progress: `tail -5 ~/qwen_describe.log`
 
-Already-described photos are skipped — safe to re-run after interruption.
+Already-described items are skipped — safe to re-run after interruption. Results go into the DB: `caption`, `quality`, `scene`, `people` columns on the `photos` table.
 
-**VRAM management**: Qwen uses ~6-7GB of the 8GB GPU. If OOM:
+**VRAM**: Qwen loads at 75% GPU cap (`max_memory={0: "6144MiB"}`) and clears activation memory after every chunk (`empty_cache()`). OOM should not occur. If the process dies anyway, check for a stale python process holding VRAM:
 ```bash
-# Find stale process holding VRAM
 fuser /dev/nvidia0 2>/dev/null | tr ' ' '\n' | xargs -I{} ps -p {} --no-headers -o pid,cmd 2>/dev/null | grep python
 kill -9 <PID>
-nvidia-smi --query-gpu=memory.used,memory.free --format=csv,noheader  # verify freed
-# then restart
 ```
 
 ---
@@ -341,14 +336,12 @@ rm -rf output/final/Canada-Ski-Trip
 
 ## Phase 8: Videos — highlight reels (per trip, on demand)
 
-Videos are organized into trip folders alongside photos. To make a highlight reel for a specific trip, use the **video-highlight-pipeline** skill interactively.
+Videos are organized into trip folders alongside photos. All videos are already described in Phase 2 (captions + quality in the DB). To make a highlight reel for a specific trip, use the **video-highlight-pipeline** skill interactively.
 
 General flow:
 1. Identify which trip folder has interesting video footage: `ls output/final/<Trip-Name>/`
-2. Invoke `/photos-organizer` → hand off to `video-highlight-pipeline` for that folder
-3. Pipeline: batch describe → Claude selects best chunks → cut reel
-
-Do NOT batch-describe all 500+ videos upfront — only process the trips you actually want reels for.
+2. Invoke `/video-highlight-pipeline` for that folder
+3. Pipeline: select best chunks (describe already done) → cut reel
 
 ---
 

@@ -398,6 +398,33 @@ def _dedup_keep(group: list[dict], conn) -> dict:
 def cmd_dedup(args):
     conn = _init_db(args.db)
     try:
+        # Pass 0: path-prefix normalization (catches absolute vs relative path dups for all media)
+        # Happens when DB was scanned from different working directories
+        all_rows = conn.execute("SELECT id, path FROM photos WHERE discarded = 0").fetchall()
+        def _norm_path(p: str) -> str:
+            # Strip any absolute prefix that resolves to the same repo root
+            import re
+            return re.sub(r'^/.*/video_read/', '', p).lstrip('/')
+
+        from collections import defaultdict
+        by_norm: dict = defaultdict(list)
+        for id_, path in all_rows:
+            by_norm[_norm_path(path)].append({"id": id_, "path": path})
+        n_prefix = 0
+        for norm_path, group in by_norm.items():
+            if len(group) < 2:
+                continue
+            keep = _dedup_keep(group, conn)
+            for p in group:
+                if p["id"] != keep["id"]:
+                    conn.execute(
+                        "UPDATE photos SET discarded=1, discard_reason=? WHERE id=?",
+                        (f"path-prefix duplicate of {keep['path']}", p["id"]),
+                    )
+                    n_prefix += 1
+        conn.commit()
+        print(f"✓ Pass 0: auto-discarded {n_prefix} path-prefix duplicate(s)")
+
         rows = conn.execute(
             "SELECT id, path, taken_at FROM photos WHERE discarded = 0"
         ).fetchall()
@@ -446,6 +473,47 @@ def cmd_dedup(args):
         conn.commit()
         print(f"✓ Pass 2: auto-discarded {n_phash} visually identical duplicate(s)")
         print(f"  Remaining photos: Qwen + Claude handle quality decisions")
+
+        # Pass 3: video cross-album dedup — same filename in multiple Google Photos albums
+        # Google Takeout copies files into both "Photos from YYYY/" and named album folders.
+        # Keep the named-album copy; discard the year-catchall copy.
+        video_rows = conn.execute(
+            "SELECT id, path, taken_at FROM photos WHERE discarded = 0"
+        ).fetchall()
+        videos = [{"id": r[0], "path": r[1], "taken_at": r[2]} for r in video_rows
+                  if Path(r[1]).suffix.lower() in _VIDEO_EXTS]
+        by_fname: dict = defaultdict(list)
+        for v in videos:
+            by_fname[Path(v["path"]).name].append(v)
+        n_video = 0
+        import re as _re
+        _year_folder = _re.compile(r'Photos from \d{4}')
+        for fname, group in by_fname.items():
+            if len(group) < 2:
+                continue
+            # Prefer named album over year catchall
+            named = [v for v in group if not _year_folder.search(v["path"])]
+            catchall = [v for v in group if _year_folder.search(v["path"])]
+            if named and catchall:
+                keep = _dedup_keep(named, conn)
+                for v in catchall:
+                    conn.execute(
+                        "UPDATE photos SET discarded=1, discard_reason=? WHERE id=?",
+                        (f"cross-album duplicate of {keep['path']}", v["id"]),
+                    )
+                    n_video += 1
+            elif len(group) > 1:
+                # All in named albums or all in catchall — keep described, then lowest ID
+                keep = _dedup_keep(group, conn)
+                for v in group:
+                    if v["id"] != keep["id"]:
+                        conn.execute(
+                            "UPDATE photos SET discarded=1, discard_reason=? WHERE id=?",
+                            (f"video duplicate of {keep['path']}", v["id"]),
+                        )
+                        n_video += 1
+        conn.commit()
+        print(f"✓ Pass 3: auto-discarded {n_video} cross-album video duplicate(s)")
     finally:
         conn.close()
 
