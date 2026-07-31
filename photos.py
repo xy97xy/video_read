@@ -1349,6 +1349,140 @@ def cmd_export_discarded(args):
         conn.close()
 
 
+def _find_cluster(clusters, name_query):
+    for c in clusters:
+        if c["name"].lower() == name_query.lower():
+            return c
+    q = name_query.lower()
+    matches = [c for c in clusters if q in c["name"].lower()]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise SystemExit(f"Ambiguous trip {name_query!r}. Matches: {', '.join(c['name'] for c in matches)}")
+    raise SystemExit(f"No cluster found matching {name_query!r}")
+
+
+def _trip_slug(name):
+    import re
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+def cmd_highlights(args):
+    import shutil, subprocess, tempfile
+
+    conn = _init_db(args.db)
+    clusters = json.loads(Path(args.clusters).read_text())
+
+    if args.mode == "list":
+        cluster = _find_cluster(clusters, args.trip)
+        ids = cluster["photo_ids"]
+        placeholders = ",".join("?" * len(ids))
+        rows = conn.execute(
+            f"SELECT vs.id, p.path, vs.start_sec, vs.end_sec, vs.score, vs.caption"
+            f" FROM video_scenes vs JOIN photos p ON p.id=vs.photo_id"
+            f" WHERE vs.photo_id IN ({placeholders})"
+            f" ORDER BY p.path, vs.start_sec",
+            ids,
+        ).fetchall()
+        if not rows:
+            print(f"No scenes found for {cluster['name']!r}")
+            return
+        print(f"\n{cluster['name']} — {len(rows)} scenes\n")
+        print(f"{'ID':>6}  {'File':<36}  {'Start':>6}  {'End':>6}  {'Score':>5}  Caption")
+        print("─" * 110)
+        for sid, path, start, end, score, cap in rows:
+            fname = Path(path).name[:36]
+            print(f"{sid:>6}  {fname:<36}  {start:>6.1f}  {end:>6.1f}  {score or 0:>5.1f}  {(cap or '')[:55]}")
+
+    elif args.mode == "cut":
+        if not args.scenes:
+            raise SystemExit("--scenes required for cut mode (comma-separated scene IDs)")
+        scene_ids = [int(x.strip()) for x in args.scenes.split(",")]
+        placeholders = ",".join("?" * len(scene_ids))
+        rows = conn.execute(
+            f"SELECT vs.id, p.path, vs.start_sec, vs.end_sec, vs.caption"
+            f" FROM video_scenes vs JOIN photos p ON p.id=vs.photo_id"
+            f" WHERE vs.id IN ({placeholders})",
+            scene_ids,
+        ).fetchall()
+        found = {r[0]: r for r in rows}
+        missing = [i for i in scene_ids if i not in found]
+        if missing:
+            raise SystemExit(f"Scene IDs not found: {missing}")
+        # preserve user-specified order
+        rows = [found[sid] for sid in scene_ids]
+
+        if args.output:
+            output = Path(args.output)
+        else:
+            trip = args.trip or "highlight"
+            slug = _trip_slug(_find_cluster(clusters, trip)["name"] if args.trip else trip)
+            output = Path(args.staging_dir) / slug / "highlight.mp4"
+        output.parent.mkdir(parents=True, exist_ok=True)
+
+        total_dur = sum(r[3] - r[2] for r in rows)
+        print(f"Cutting {len(rows)} scenes ({total_dur:.1f}s) → {output}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            clips = []
+            for i, (sid, path, start, end, cap) in enumerate(rows, 1):
+                src = Path(path)
+                if not src.exists():
+                    raise SystemExit(f"Source not found: {path}")
+                dur = end - start
+                clip_path = Path(tmp) / f"clip_{i:03d}.mp4"
+                clips.append(clip_path)
+                print(f"  [{i}/{len(rows)}] {src.name}  {start:.1f}→{end:.1f}s  ({dur:.1f}s)", flush=True)
+                result = subprocess.run(
+                    ["ffmpeg", "-y", "-ss", str(start), "-i", str(src), "-t", str(dur),
+                     "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                     "-c:a", "aac", "-b:a", "128k",
+                     str(clip_path)],
+                    capture_output=True, text=True,
+                )
+                if result.returncode != 0:
+                    raise SystemExit(f"ffmpeg failed:\n{result.stderr[-600:]}")
+                print(f"      ✓ {clip_path.stat().st_size // 1024} KB", flush=True)
+
+            list_path = Path(tmp) / "concat.txt"
+            list_path.write_text("\n".join(f"file '{p}'" for p in clips))
+            print(f"\nConcatenating → {output.name}", flush=True)
+            proc = subprocess.Popen(
+                ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                 "-i", str(list_path), "-c", "copy", str(output)],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            )
+            for line in proc.stdout:
+                line = line.rstrip()
+                if "frame=" in line or "size=" in line:
+                    print(f"  {line}", flush=True)
+            proc.wait()
+            if proc.returncode != 0:
+                raise SystemExit("concat failed — check ffmpeg output above")
+
+        size_mb = output.stat().st_size / 1_048_576
+        print(f"\n✓ {output}  ({size_mb:.1f} MB, {total_dur:.1f}s)")
+
+    elif args.mode == "mark-final":
+        cluster = _find_cluster(clusters, args.trip)
+        slug = _trip_slug(cluster["name"])
+        staging = Path(args.staging_dir) / slug
+        final_dir = Path(args.final_dir) / cluster["name"]
+        if not staging.exists():
+            raise SystemExit(f"No staging dir: {staging}  (run highlights cut first)")
+        final_dir.mkdir(parents=True, exist_ok=True)
+        moved = []
+        for f in sorted(staging.iterdir()):
+            dest = final_dir / f.name
+            shutil.move(str(f), str(dest))
+            moved.append((dest, dest.stat().st_size / 1_048_576))
+        print(f"✓ Moved {len(moved)} file(s)  {staging} → {final_dir}")
+        for dest, mb in moved:
+            print(f"   {dest.name}  ({mb:.1f} MB)")
+
+    conn.close()
+
+
 def cmd_enhance(args):
     from photos.enhance import enhance_photo, make_comparison
     from PIL import Image as _Image
@@ -1452,6 +1586,20 @@ def main():
     desc.add_argument("--benchmark", action="store_true",
                       help="Compare providers on 20 sample photos, no DB writes")
 
+    hl = sub.add_parser("highlights", help="List, cut, and finalize trip highlight reels")
+    hl.add_argument("mode", choices=["list", "cut", "mark-final"],
+                    help="list: show scenes  cut: render reel  mark-final: move to final/")
+    hl.add_argument("trip", metavar="TRIP", nargs="?",
+                    help="Trip name (or substring). Required for list and mark-final.")
+    hl.add_argument("--db", default="output/photos.db", metavar="DB")
+    hl.add_argument("--clusters", default="output/clusters.json", metavar="FILE")
+    hl.add_argument("--scenes", metavar="IDS",
+                    help="Comma-separated scene IDs in playback order (cut mode)")
+    hl.add_argument("--output", metavar="FILE",
+                    help="Output path (cut mode; default: output/staging/clips/<slug>/highlight.mp4)")
+    hl.add_argument("--staging-dir", default="output/staging/clips", metavar="DIR")
+    hl.add_argument("--final-dir", default="output/final", metavar="DIR")
+
     sd = sub.add_parser("show-discards", help="Contact sheet of discarded photos paired with their kept version")
     sd.add_argument("--db", default="output/photos.db", metavar="DB")
     sd.add_argument("--reason", default=None, metavar="REASON",
@@ -1513,6 +1661,7 @@ def main():
      "dedup": cmd_dedup, "describe": cmd_describe,
      "recommend": cmd_recommend, "flag": cmd_flag,
      "search": cmd_search, "enhance": cmd_enhance,
+     "highlights": cmd_highlights,
      "export-takeout": cmd_export_takeout,
      "export-discarded": cmd_export_discarded,
      "fix-dates": cmd_fix_dates,
