@@ -157,21 +157,27 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .wpl-nav:hover{color:var(--tx);}
 .slist{flex:1;overflow-y:auto;}
 .slist::-webkit-scrollbar{width:4px;}.slist::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px;}
-.srow{display:flex;align-items:center;border-bottom:1px solid var(--bd);cursor:pointer;transition:background .08s;min-height:48px;}
+/* Narrow-column row: the panel is ~300px, so nothing may be unshrinkable.
+   Layout is [play] [info (2 lines, both ellipsised)] [toggle]; the duration
+   moved onto line 1 with the timecode instead of holding its own column. */
+.srow{display:flex;align-items:flex-start;gap:7px;padding:7px 8px;border-bottom:1px solid var(--bd);cursor:pointer;transition:background .08s;}
 .srow:hover{background:var(--sf2);}
 .srow.playing{background:var(--abg);}
-.sr-play{width:40px;flex-shrink:0;display:flex;align-items:center;justify-content:center;}
-.sr-pb{width:26px;height:26px;border-radius:50%;background:var(--sf3);border:1px solid var(--bd);display:flex;align-items:center;justify-content:center;color:var(--tx2);transition:background .1s,color .1s;flex-shrink:0;}
+.sr-play{flex:0 0 auto;display:flex;align-items:center;justify-content:center;padding-top:1px;}
+.sr-pb{width:22px;height:22px;border-radius:50%;background:var(--sf3);border:1px solid var(--bd);display:flex;align-items:center;justify-content:center;color:var(--tx2);transition:background .1s,color .1s;flex-shrink:0;}
 .srow:hover .sr-pb{background:var(--ac);color:#fff;border-color:var(--ac);}
 .srow.playing .sr-pb{background:var(--go);color:#fff;border-color:var(--go);}
-.sr-info{flex:1;padding:7px 0 7px 4px;min-width:0;}
-.sr-r1{display:flex;align-items:center;gap:6px;margin-bottom:2px;overflow:hidden;}
-.sr-file{font-family:ui-monospace,monospace;font-size:11px;font-weight:600;color:var(--tx2);white-space:nowrap;flex-shrink:0;}
+.sr-info{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.sr-r1{display:flex;align-items:baseline;gap:5px;min-width:0;}
+/* the filename is the only thing allowed to absorb the squeeze */
+.sr-file{font-family:ui-monospace,monospace;font-size:11px;font-weight:600;color:var(--tx2);flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .sr-tc{font-family:ui-monospace,monospace;font-size:10px;color:var(--tx3);white-space:nowrap;flex-shrink:0;}
-.sr-cap{font-size:11px;color:var(--tx3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.sr-r2{display:flex;align-items:baseline;gap:5px;min-width:0;}
+.sr-cap{font-size:11px;color:var(--tx3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto;min-width:0;}
 .srow:hover .sr-cap,.srow.playing .sr-cap{color:var(--tx2);}
-.sr-dur{width:36px;flex-shrink:0;text-align:right;font-family:ui-monospace,monospace;font-size:10px;color:var(--tx3);padding-right:8px;}
-.sr-inc{width:54px;flex-shrink:0;display:flex;align-items:center;justify-content:center;gap:3px;}
+/* duration sits with the timecode on line 1 rather than in its own column */
+.sr-dur{flex-shrink:0;font-family:ui-monospace,monospace;font-size:10px;color:var(--tx3);opacity:.85;}
+.sr-inc{flex:0 0 auto;display:flex;align-items:center;gap:3px;padding-top:2px;}
 .inc-btn{width:30px;height:18px;border-radius:9px;cursor:pointer;display:flex;align-items:center;padding:0 2px;background:var(--sf3);border:1px solid var(--bd);flex-shrink:0;transition:background .12s,border-color .12s;}
 .inc-btn.on{background:var(--ac);border-color:var(--ac);}
 .inc-dot{width:13px;height:13px;border-radius:50%;background:var(--tx3);transition:transform .12s,background .12s;flex-shrink:0;}
@@ -679,13 +685,15 @@ function renderReview() {
           <div class="sr-info">
             <div class="sr-r1">
               <span class="sr-file">${x.file}</span>
-              <span class="sr-tc">${fmt(x.start)}–${fmt(x.end)}</span>
               <span class="ltag ${sCls(x.score)}">${x.score.toFixed(1)}</span>
               ${x.ai ? '<span class="ltag-ai">AI</span>' : ''}
             </div>
-            <div class="sr-cap">${x.caption}</div>
+            <div class="sr-r2">
+              <span class="sr-tc">${fmt(x.start)}–${fmt(x.end)}</span>
+              <span class="sr-dur">${fmt(x.dur)}</span>
+              <span class="sr-cap">${x.caption}</span>
+            </div>
           </div>
-          <div class="sr-dur">${fmt(x.dur)}</div>
           <div class="sr-inc" onclick="event.stopPropagation();tog('${t.id}','${x.id}')">
             <div class="inc-btn${on?' on':''}" title="${on?'Remove from reel':'Add to reel'}"><div class="inc-dot"></div></div>
             <span class="inc-ord">${on?`#${ord}`:''}</span>
