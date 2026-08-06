@@ -1349,6 +1349,459 @@ def cmd_export_discarded(args):
         conn.close()
 
 
+def _run_highlights_server(args):
+    import hashlib, threading, time, uuid, subprocess as _sp, tempfile
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import parse_qs, urlparse
+
+    clusters  = json.loads(Path(args.clusters).read_text())
+    stg_dir   = Path(args.staging_dir)
+    final_dir = Path(args.final_dir)
+    db_path   = args.db
+
+    _jobs      = {}   # job_id -> {'log': [], 'done': bool}
+    _jobs_lock = threading.Lock()
+
+    # ── helpers ──────────────────────────────────────────────────────────
+    def _color(name):
+        h = int(hashlib.md5(name.encode()).hexdigest()[:6], 16)
+        return [max(30, min(160, (h >> 16) & 0xFF)),
+                max(30, min(160, (h >>  8) & 0xFF)),
+                max(30, min(160,  h        & 0xFF))]
+
+    def _date_label(iso):
+        try:
+            from datetime import date as _d
+            return _d.fromisoformat(iso[:10]).strftime("%b %Y")
+        except Exception:
+            return iso[:7]
+
+    # ── API data builders ────────────────────────────────────────────────
+    def _build_trips():
+        conn = _init_db(db_path)
+        try:
+            result = []
+            for c in clusters:
+                ids = c["photo_ids"]
+                if not ids:
+                    continue
+                ph = ",".join("?" * len(ids))
+                n = conn.execute(f"SELECT COUNT(*) FROM video_scenes WHERE photo_id IN ({ph})", ids).fetchone()[0]
+                if not n:
+                    continue
+                hi  = conn.execute(f"SELECT COUNT(*) FROM video_scenes WHERE photo_id IN ({ph}) AND score >= 2.5", ids).fetchone()[0]
+                mid = conn.execute(f"SELECT COUNT(*) FROM video_scenes WHERE photo_id IN ({ph}) AND score >= 1.5 AND score < 2.5", ids).fetchone()[0]
+                total_sec = conn.execute(f"SELECT COALESCE(SUM(end_sec-start_sec),0) FROM video_scenes WHERE photo_id IN ({ph})", ids).fetchone()[0]
+                vpaths = [r[0] for r in conn.execute(
+                    f"SELECT path FROM photos WHERE id IN ({ph}) AND discarded=0", ids
+                ) if any(r[0].lower().endswith(e) for e in ('.mp4','.mov','.avi','.m4v','.mkv'))]
+                # estimate raw size from sample
+                raw_bytes = sum(Path(p).stat().st_size for p in vpaths[:15] if Path(p).exists())
+                raw_gb    = (raw_bytes / max(1, min(15, len(vpaths)))) * len(vpaths) / 1e9
+                slug      = _trip_slug(c["name"])
+                reel      = stg_dir / slug / "highlight.mp4"
+                reel_mb   = round(reel.stat().st_size / 1e6, 1) if reel.exists() else None
+                result.append({
+                    "id": slug, "name": c["name"],
+                    "date":  _date_label(c.get("start", "")),
+                    "clips": len(vpaths), "footage_sec": round(total_sec),
+                    "scene_count": n, "high": hi, "mid": mid, "low": n - hi - mid,
+                    "raw_gb": round(raw_gb, 1),
+                    "reel_mb": reel_mb, "status": "done" if reel.exists() else "none",
+                    "color": _color(c["name"]),
+                })
+            return sorted(result, key=lambda x: -x["scene_count"])
+        finally:
+            conn.close()
+
+    def _build_scenes(trip_id):
+        c = next((c for c in clusters if _trip_slug(c["name"]) == trip_id), None)
+        if not c:
+            return None
+        ids = c["photo_ids"]
+        ph  = ",".join("?" * len(ids))
+        col = _color(c["name"])
+        conn = _init_db(db_path)
+        try:
+            rows = conn.execute(
+                f"SELECT vs.id, p.path, vs.start_sec, vs.end_sec, vs.score, vs.caption "
+                f"FROM video_scenes vs JOIN photos p ON p.id=vs.photo_id "
+                f"WHERE vs.photo_id IN ({ph}) ORDER BY p.path, vs.start_sec", ids
+            ).fetchall()
+            return [{"id": r[0], "file": Path(r[1]).name, "path": r[1],
+                     "start": r[2], "end": r[3], "dur": round(r[3]-r[2], 2),
+                     "score": r[4] or 0, "caption": r[5] or "", "ai": (r[4] or 0) >= 2.5,
+                     "color": col} for r in rows]
+        finally:
+            conn.close()
+
+    def _run_cut_job(job_id, trip_id, scene_ids, out_path):
+        def log(ev):
+            with _jobs_lock:
+                _jobs[job_id]["log"].append(ev)
+        try:
+            c = next((c for c in clusters if _trip_slug(c["name"]) == trip_id), None)
+            if not c:
+                log({"type": "error", "msg": f"trip not found: {trip_id}"}); return
+            ph   = ",".join("?" * len(scene_ids))
+            conn = _init_db(db_path)
+            rows = conn.execute(
+                f"SELECT vs.id, p.path, vs.start_sec, vs.end_sec "
+                f"FROM video_scenes vs JOIN photos p ON p.id=vs.photo_id WHERE vs.id IN ({ph})",
+                scene_ids
+            ).fetchall()
+            conn.close()
+            by_id = {r[0]: r for r in rows}
+            missing = [s for s in scene_ids if s not in by_id]
+            if missing:
+                log({"type": "error", "msg": f"scene IDs not found: {missing}"}); return
+            rows = [by_id[s] for s in scene_ids]
+            out  = Path(out_path or (stg_dir / trip_id / "highlight.mp4"))
+            out.parent.mkdir(parents=True, exist_ok=True)
+            total = round(sum(r[3]-r[2] for r in rows), 2)
+            log({"type": "start", "n": len(rows), "dur": total, "out": str(out)})
+            with tempfile.TemporaryDirectory() as tmp:
+                clips = []
+                for i, (sid, path, s, e) in enumerate(rows, 1):
+                    if not Path(path).exists():
+                        log({"type": "error", "msg": f"file not found: {path}"}); return
+                    clip = Path(tmp) / f"clip_{i:03d}.mp4"
+                    clips.append(clip)
+                    log({"type": "scene_start", "i": i, "n": len(rows), "file": Path(path).name, "s": s, "e": e})
+                    try:
+                        r = _sp.run(
+                            ["ffmpeg", "-y", "-ss", str(s), "-i", path, "-t", str(e-s),
+                             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                             "-c:a", "aac", "-b:a", "128k", str(clip)],
+                            capture_output=True, text=True, timeout=300
+                        )
+                    except _sp.TimeoutExpired:
+                        log({"type": "error", "msg": f"ffmpeg timed out on {Path(path).name}"}); return
+                    if r.returncode != 0:
+                        log({"type": "error", "msg": r.stderr[-600:]}); return
+                    log({"type": "scene_done", "i": i, "kb": clip.stat().st_size // 1024})
+                lst = Path(tmp) / "list.txt"
+                lst.write_text("\n".join(f"file '{p}'" for p in clips))
+                log({"type": "concat"})
+                proc = _sp.Popen(
+                    ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                     "-i", str(lst), "-c", "copy", str(out)],
+                    stdout=_sp.PIPE, stderr=_sp.PIPE, text=True
+                )
+                for line in proc.stdout:
+                    line = line.rstrip()
+                    if "frame=" in line or "size=" in line:
+                        log({"type": "ffmpeg", "text": line})
+                _, concat_err = proc.communicate()
+                if proc.returncode != 0:
+                    log({"type": "error", "msg": f"concat failed:\n{concat_err[-600:]}"}); return
+            mb = round(out.stat().st_size / 1e6, 1)
+            log({"type": "done", "out": str(out), "mb": mb, "dur": total})
+            _log("   ", f"cut done  job={job_id}  {out.name}  {mb}MB  {total}s")
+            for t in _trips_cache:
+                if t["id"] == trip_id:
+                    t["reel_mb"] = mb; t["status"] = "done"
+        except Exception as ex:
+            import traceback as _tb2
+            log({"type": "error", "msg": str(ex)})
+            _log("ERR", f"cut failed  job={job_id}: {ex}")
+            _sys.stderr.write(_tb2.format_exc())
+        finally:
+            with _jobs_lock:
+                _jobs[job_id]["done"] = True
+
+    # ── logging ──────────────────────────────────────────────────────────
+    import sys as _sys
+
+    def _log(level, msg):
+        ts = time.strftime("%H:%M:%S")
+        _sys.stderr.write(f"[{ts}] {level}  {msg}\n")
+        _sys.stderr.flush()
+
+    # ── HTTP handler ─────────────────────────────────────────────────────
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            pass  # replaced by timed logging in do_GET/do_POST
+
+        def _log_req(self, status, extra=""):
+            elapsed = time.monotonic() - self._t0
+            tail = f"  {extra}" if extra else ""
+            lvl = "ERR" if status >= 500 else "WRN" if status >= 400 else "   "
+            _log(lvl, f"{self.command} {self.path} → {status}  ({elapsed*1000:.0f}ms){tail}")
+
+        def json_ok(self, data, status=200):
+            body = json.dumps(data).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", len(body))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def json_err(self, code, msg):
+            body = json.dumps({"error": msg}).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", len(body))
+            self.end_headers()
+            self.wfile.write(body)
+            self._log_req(code, msg)
+
+        def do_OPTIONS(self):
+            self._t0 = time.monotonic()
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.end_headers()
+
+        def do_GET(self):
+            self._t0 = time.monotonic()
+            try:
+                self._do_GET()
+            except BrokenPipeError:
+                _log("   ", f"client disconnected: {self.path}")
+            except Exception as ex:
+                import traceback as _tb
+                _log("ERR", f"unhandled in GET {self.path}: {ex}")
+                _sys.stderr.write(_tb.format_exc())
+                try:
+                    self.json_err(500, str(ex))
+                except Exception:
+                    pass
+
+        def _do_GET(self):
+            p = urlparse(self.path)
+            qs = parse_qs(p.query)
+            if p.path in ("/", "/index.html"):
+                ui = Path(__file__).parent / "highlights_ui.html"
+                if not ui.exists():
+                    self.json_err(404, "highlights_ui.html not found — run from the project root"); return
+                body = ui.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", len(body))
+                self.end_headers()
+                self.wfile.write(body)
+                self._log_req(200, f"{len(body)//1024}KB")
+            elif p.path == "/api/trips":
+                self.json_ok(_trips_cache)
+                self._log_req(200, f"{len(_trips_cache)} trips")
+            elif p.path == "/api/scenes":
+                tid = qs.get("trip", [None])[0]
+                if not tid:
+                    self.json_err(400, "missing ?trip="); return
+                sc = _build_scenes(tid)
+                if sc is None:
+                    self.json_err(404, f"trip not found: {tid}"); return
+                self.json_ok(sc)
+                self._log_req(200, f"{len(sc)} scenes for {tid}")
+            elif p.path.startswith("/api/job/"):
+                job_id = p.path.rsplit("/", 1)[-1]
+                with _jobs_lock:
+                    if job_id not in _jobs:
+                        self.json_err(404, f"job not found: {job_id}"); return
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("X-Accel-Buffering", "no")
+                self.end_headers()
+                _log("   ", f"SSE open  job={job_id}")
+                sent = 0
+                while True:
+                    with _jobs_lock:
+                        job = _jobs.get(job_id, {})
+                    evts = job.get("log", [])
+                    while sent < len(evts):
+                        try:
+                            self.wfile.write(f"data: {json.dumps(evts[sent])}\n\n".encode())
+                            self.wfile.flush()
+                        except (BrokenPipeError, ConnectionResetError):
+                            _log("   ", f"SSE client disconnected job={job_id} after {sent} events")
+                            return
+                        sent += 1
+                    if job.get("done"):
+                        break
+                    time.sleep(0.08)
+                _log("   ", f"SSE closed job={job_id} ({sent} events)")
+            elif p.path == "/api/reel":
+                tid = qs.get("trip", [None])[0]
+                if not tid:
+                    self.json_err(400, "missing ?trip="); return
+                fp = stg_dir / tid / "highlight.mp4"
+                if not fp.exists():
+                    self.json_err(404, f"reel not found for {tid}"); return
+                qs = {"path": [str(fp)]}  # fall through to /api/video logic
+                p = urlparse("/api/video"); p = type('P', (), {'path': '/api/video'})()
+                # serve inline by duplicating logic (keep it simple)
+                size = fp.stat().st_size
+                rng  = self.headers.get("Range","")
+                if rng.startswith("bytes="):
+                    rstart, _, rend = rng[6:].partition("-")
+                    rstart = int(rstart); rend = int(rend) if rend else size-1
+                    rend = min(rend, size-1); rlen = rend - rstart + 1
+                    self.send_response(206)
+                    self.send_header("Content-Range",  f"bytes {rstart}-{rend}/{size}")
+                    self.send_header("Content-Length", rlen)
+                    self.send_header("Content-Type",   "video/mp4")
+                    self.send_header("Accept-Ranges",  "bytes")
+                    self.end_headers()
+                    with open(fp, "rb") as f:
+                        f.seek(rstart)
+                        remaining = rlen
+                        while remaining:
+                            chunk = f.read(min(65536, remaining))
+                            if not chunk: break
+                            self.wfile.write(chunk); remaining -= len(chunk)
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type",   "video/mp4")
+                    self.send_header("Content-Length", size)
+                    self.send_header("Accept-Ranges",  "bytes")
+                    self.end_headers()
+                    with open(fp, "rb") as f:
+                        while True:
+                            chunk = f.read(65536)
+                            if not chunk: break
+                            self.wfile.write(chunk)
+                self._log_req(206 if rng else 200, f"reel {tid}")
+            elif p.path == "/api/video":
+                fpath = qs.get("path", [None])[0]
+                if not fpath:
+                    self.json_err(400, "missing ?path="); return
+                fp = Path(fpath)
+                if not fp.exists() or not fp.is_file():
+                    self.json_err(404, f"not found: {fpath}"); return
+                ext  = fp.suffix.lower().lstrip(".")
+                mime = {"mp4":"video/mp4","mov":"video/quicktime","m4v":"video/mp4",
+                        "avi":"video/x-msvideo","mkv":"video/x-matroska"}.get(ext,"video/mp4")
+                size = fp.stat().st_size
+                rng  = self.headers.get("Range","")
+                if rng.startswith("bytes="):
+                    rstart, _, rend = rng[6:].partition("-")
+                    rstart = int(rstart)
+                    rend   = int(rend) if rend else size - 1
+                    rend   = min(rend, size - 1)
+                    rlen   = rend - rstart + 1
+                    self.send_response(206)
+                    self.send_header("Content-Range",  f"bytes {rstart}-{rend}/{size}")
+                    self.send_header("Content-Length", rlen)
+                    self.send_header("Content-Type",   mime)
+                    self.send_header("Accept-Ranges",  "bytes")
+                    self.end_headers()
+                    with open(fp, "rb") as f:
+                        f.seek(rstart)
+                        remaining = rlen
+                        while remaining:
+                            chunk = f.read(min(65536, remaining))
+                            if not chunk: break
+                            self.wfile.write(chunk)
+                            remaining -= len(chunk)
+                    self._log_req(206, f"{fp.name} {rstart}-{rend}")
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type",   mime)
+                    self.send_header("Content-Length", size)
+                    self.send_header("Accept-Ranges",  "bytes")
+                    self.end_headers()
+                    with open(fp, "rb") as f:
+                        while True:
+                            chunk = f.read(65536)
+                            if not chunk: break
+                            self.wfile.write(chunk)
+                    self._log_req(200, fp.name)
+            else:
+                self.send_response(404); self.end_headers()
+                self._log_req(404)
+
+        def do_POST(self):
+            self._t0 = time.monotonic()
+            try:
+                self._do_POST()
+            except BrokenPipeError:
+                _log("   ", f"client disconnected: {self.path}")
+            except Exception as ex:
+                import traceback as _tb
+                _log("ERR", f"unhandled in POST {self.path}: {ex}")
+                _sys.stderr.write(_tb.format_exc())
+                try:
+                    self.json_err(500, str(ex))
+                except Exception:
+                    pass
+
+        def _do_POST(self):
+            n = self.headers.get("Content-Length")
+            if n is None:
+                self.json_err(411, "Content-Length required"); return
+            try:
+                body = json.loads(self.rfile.read(int(n)))
+            except (ValueError, json.JSONDecodeError) as ex:
+                self.json_err(400, f"bad JSON: {ex}"); return
+            p = urlparse(self.path).path
+            if p == "/api/cut":
+                tid  = body.get("trip")
+                sids = body.get("scenes", [])
+                if not isinstance(tid, str) or not tid:
+                    self.json_err(400, "missing field: trip"); return
+                if not isinstance(sids, list) or not sids:
+                    self.json_err(400, "missing field: scenes (must be non-empty list)"); return
+                # Validate all scene IDs are integers (prevent injection)
+                try:
+                    sids = [int(s) for s in sids]
+                except (TypeError, ValueError):
+                    self.json_err(400, "scenes must be integer IDs"); return
+                job_id = uuid.uuid4().hex[:8]
+                with _jobs_lock:
+                    _jobs[job_id] = {"log": [], "done": False}
+                _log("   ", f"cut job={job_id} trip={tid} scenes={sids}")
+                threading.Thread(
+                    target=_run_cut_job,
+                    args=(job_id, tid, sids, body.get("output")),
+                    daemon=True
+                ).start()
+                self.json_ok({"job_id": job_id})
+                self._log_req(200, f"job_id={job_id}")
+            elif p == "/api/mark-final":
+                import shutil as _sh
+                tid = body.get("trip")
+                if not isinstance(tid, str) or not tid:
+                    self.json_err(400, "missing field: trip"); return
+                cl = next((c for c in clusters if _trip_slug(c["name"]) == tid), None)
+                if not cl:
+                    self.json_err(404, f"trip not found: {tid}"); return
+                src = stg_dir / tid
+                if not src.exists():
+                    self.json_err(400, f"staging dir not found: {src}"); return
+                dst = final_dir / cl["name"]
+                dst.mkdir(parents=True, exist_ok=True)
+                moved = []
+                for f in sorted(src.iterdir()):
+                    d = dst / f.name
+                    _sh.move(str(f), str(d))
+                    moved.append({"name": f.name, "mb": round(d.stat().st_size / 1e6, 1)})
+                self.json_ok({"moved": moved})
+                self._log_req(200, f"moved {len(moved)} file(s) for {tid}")
+            else:
+                self.json_err(404, f"unknown endpoint: {p}")
+
+    print("Loading trip data…", flush=True)
+    _trips_cache = _build_trips()
+    print(f"  {len(_trips_cache)} trips with scenes", flush=True)
+
+    url = f"http://localhost:{args.port}"
+    server = ThreadingHTTPServer(("localhost", args.port), Handler)
+    print(f"✓ Highlights UI  →  {url}")
+    try:
+        import webbrowser; webbrowser.open(url)
+    except Exception:
+        pass
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopped.")
+
+
 def _find_cluster(clusters, name_query):
     for c in clusters:
         if c["name"].lower() == name_query.lower():
@@ -1372,6 +1825,10 @@ def cmd_highlights(args):
 
     conn = _init_db(args.db)
     clusters = json.loads(Path(args.clusters).read_text())
+
+    if args.mode == "serve":
+        _run_highlights_server(args)
+        return
 
     if args.mode == "list":
         cluster = _find_cluster(clusters, args.trip)
@@ -1587,7 +2044,7 @@ def main():
                       help="Compare providers on 20 sample photos, no DB writes")
 
     hl = sub.add_parser("highlights", help="List, cut, and finalize trip highlight reels")
-    hl.add_argument("mode", choices=["list", "cut", "mark-final"],
+    hl.add_argument("mode", choices=["list", "cut", "mark-final", "serve"],
                     help="list: show scenes  cut: render reel  mark-final: move to final/")
     hl.add_argument("trip", metavar="TRIP", nargs="?",
                     help="Trip name (or substring). Required for list and mark-final.")
@@ -1599,6 +2056,8 @@ def main():
                     help="Output path (cut mode; default: output/staging/clips/<slug>/highlight.mp4)")
     hl.add_argument("--staging-dir", default="output/staging/clips", metavar="DIR")
     hl.add_argument("--final-dir", default="output/final", metavar="DIR")
+    hl.add_argument("--port", type=int, default=7777, metavar="PORT",
+                    help="Port for serve mode (default: 7777)")
 
     sd = sub.add_parser("show-discards", help="Contact sheet of discarded photos paired with their kept version")
     sd.add_argument("--db", default="output/photos.db", metavar="DB")
