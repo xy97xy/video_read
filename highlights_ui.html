@@ -1,0 +1,1008 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Highlights — Video Pipeline</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+:root{
+  --bg:#0d0d12;--surface:#18181f;--sf2:#1f1f28;--sf3:#26262f;
+  --sb:#111117;--bd:#2a2a38;--bd2:#363648;
+  --tx:#dcdcf0;--tx2:#6868a0;--tx3:#3c3c58;
+  --ac:#4f79e0;--abg:rgba(79,121,224,.12);--ari:rgba(79,121,224,.28);
+  --go:#3aaa72;--gbg:rgba(58,170,114,.12);--gbd:rgba(58,170,114,.22);
+  --wa:#c09438;--wbg:rgba(192,148,56,.12);--wbd:rgba(192,148,56,.2);
+  --lobg:rgba(58,58,86,.18);--dan:#cc5252;
+  --th:48px;--lw:276px;
+}
+@media(prefers-color-scheme:light){:root{
+  --bg:#ecedf3;--surface:#fff;--sf2:#f0f0f6;--sf3:#e8e8f0;--sb:#f4f4f9;
+  --bd:#d2d2e4;--bd2:#bcbcd4;--tx:#14142a;--tx2:#585880;--tx3:#9898c0;
+  --abg:rgba(79,121,224,.08);--ari:rgba(79,121,224,.2);
+  --gbg:rgba(58,170,114,.08);--gbd:rgba(58,170,114,.16);
+  --wbg:rgba(192,148,56,.08);--wbd:rgba(192,148,56,.14);--lobg:rgba(80,80,120,.06);
+}}
+:root[data-theme=light]{--bg:#ecedf3;--surface:#fff;--sf2:#f0f0f6;--sf3:#e8e8f0;--sb:#f4f4f9;--bd:#d2d2e4;--bd2:#bcbcd4;--tx:#14142a;--tx2:#585880;--tx3:#9898c0;--abg:rgba(79,121,224,.08);--ari:rgba(79,121,224,.2);--gbg:rgba(58,170,114,.08);--gbd:rgba(58,170,114,.16);--wbg:rgba(192,148,56,.08);--wbd:rgba(192,148,56,.14);--lobg:rgba(80,80,120,.06);}
+:root[data-theme=dark]{--bg:#0d0d12;--surface:#18181f;--sf2:#1f1f28;--sf3:#26262f;--sb:#111117;--bd:#2a2a38;--bd2:#363648;--tx:#dcdcf0;--tx2:#6868a0;--tx3:#3c3c58;--abg:rgba(79,121,224,.12);--ari:rgba(79,121,224,.28);--gbg:rgba(58,170,114,.12);--gbd:rgba(58,170,114,.22);--wbg:rgba(192,148,56,.12);--wbd:rgba(192,148,56,.2);--lobg:rgba(58,58,86,.18);}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:13px;line-height:1.5;}
+
+/* TOPBAR */
+.topbar{position:fixed;top:0;left:0;right:0;height:var(--th);background:var(--sb);border-bottom:1px solid var(--bd);display:flex;align-items:stretch;z-index:100;}
+.tb-logo{display:flex;align-items:center;gap:8px;padding:0 16px;border-right:1px solid var(--bd);flex-shrink:0;}
+.lm{width:20px;height:20px;background:var(--ac);border-radius:4px;display:grid;grid-template-columns:1fr 1fr;gap:2px;padding:3px;}
+.lm span{background:rgba(255,255,255,.9);border-radius:1px;}.lm span:nth-child(2){opacity:.45;}.lm span:nth-child(3){opacity:.35;}.lm span:nth-child(4){opacity:.2;}
+.ln{font-size:13px;font-weight:700;letter-spacing:-.015em;white-space:nowrap;}.ln em{color:var(--tx2);font-style:normal;font-weight:400;}
+.tb-nav{display:flex;align-items:stretch;border-right:1px solid var(--bd);}
+.ntab{padding:0 16px;display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--tx2);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;}
+.ntab:hover{color:var(--tx);}.ntab.on{color:var(--ac);border-bottom-color:var(--ac);}
+.tb-mid{flex:1;display:flex;align-items:center;padding:0 16px;gap:16px;}
+.tbs{font-size:11px;color:var(--tx2);white-space:nowrap;}.tbs b{color:var(--tx);}
+.tb-prog-wrap{display:flex;align-items:center;gap:8px;margin-left:auto;}
+.pt{width:88px;height:5px;background:var(--bd);border-radius:3px;display:flex;gap:1px;overflow:hidden;}
+.pt-d{background:var(--go);}.pt-p{background:var(--wa);}
+.pl{font-size:11px;color:var(--tx2);white-space:nowrap;font-variant-numeric:tabular-nums;}.pl b{color:var(--tx);}
+.tb-end{display:flex;align-items:center;padding:0 12px;border-left:1px solid var(--bd);gap:6px;}
+.tb-btn{background:none;border:1px solid var(--bd);border-radius:5px;padding:3px 8px;color:var(--tx2);font-size:11px;cursor:pointer;}.tb-btn:hover{color:var(--tx);}
+
+/* SHELL */
+.shell{position:fixed;top:var(--th);left:0;right:0;bottom:0;}
+.pane{width:100%;height:100%;display:none;overflow:hidden;}
+.pane.on{display:flex;}
+
+/* ══ OVERVIEW ══ */
+.ov-left{width:var(--lw);flex-shrink:0;background:var(--sb);border-right:1px solid var(--bd);display:flex;flex-direction:column;}
+.ov-bar{flex-shrink:0;padding:7px 10px 6px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:4px;flex-wrap:wrap;}
+.ft{padding:3px 9px;border-radius:14px;border:1px solid var(--bd);background:none;font-size:11px;color:var(--tx2);cursor:pointer;white-space:nowrap;}
+.ft:hover{color:var(--tx);border-color:var(--bd2);}.ft.on{background:var(--abg);border-color:var(--ac);color:var(--ac);font-weight:600;}
+.ft.on.g{background:var(--gbg);border-color:var(--gbd);color:var(--go);}.ft.on.w{background:var(--wbg);border-color:var(--wbd);color:var(--wa);}
+.ov-list{flex:1;overflow-y:auto;padding:4px 6px;}
+.ov-list::-webkit-scrollbar{width:3px;}.ov-list::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px;}
+.tr{padding:7px 9px;border-radius:7px;cursor:pointer;display:flex;align-items:center;gap:8px;transition:background .1s;}
+.tr:hover{background:var(--sf2);}.tr.on{background:var(--abg);}.tr.on.d{background:var(--gbg);}
+.tr-col{width:3px;flex-shrink:0;border-radius:2px;align-self:stretch;}
+.tr-main{flex:1;min-width:0;}
+.tr-r1{display:flex;align-items:center;gap:5px;margin-bottom:2px;}
+.tr-nm{font-size:12px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-.01em;}
+.tr.on .tr-nm{color:var(--ac);}.tr.on.d .tr-nm{color:var(--go);}
+.badge{font-size:9px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:1px 5px;border-radius:3px;flex-shrink:0;}
+.bd-d{background:var(--gbg);color:var(--go);border:1px solid var(--gbd);}
+.bd-p{background:var(--wbg);color:var(--wa);border:1px solid var(--wbd);}
+.bd-n{background:var(--lobg);color:var(--tx3);border:1px solid var(--bd);}
+.tr-rail{height:2.5px;display:flex;gap:1px;margin-bottom:3px;}
+.rh{background:var(--go);border-radius:1px;}.rm{background:var(--wa);border-radius:1px;}.rl{background:var(--tx3);opacity:.3;border-radius:1px;}
+.tr-st{font-size:10px;color:var(--tx3);display:flex;gap:4px;font-variant-numeric:tabular-nums;}.tr-st b{color:var(--tx2);}
+.tr-arr{color:var(--tx3);font-size:11px;flex-shrink:0;}
+.grp{padding:5px 9px 3px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--tx3);display:flex;align-items:center;gap:5px;cursor:pointer;border-radius:5px;user-select:none;}
+.grp:hover{color:var(--tx2);}
+.grp-arr{transition:transform .15s;display:inline-block;font-size:8px;}
+.grp.collapsed .grp-arr{transform:rotate(-90deg);}
+.grp-trips{overflow:hidden;transition:none;}
+.ov-right{flex:1;display:flex;flex-direction:column;overflow:hidden;background:var(--bg);}
+.ov-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;}
+.oe-i{font-size:32px;opacity:.15;}.oe-m{font-size:13px;color:var(--tx3);}
+/* detail */
+.dt-hd{flex-shrink:0;background:var(--surface);border-bottom:1px solid var(--bd);}
+.dt-thumb{position:relative;aspect-ratio:16/5;overflow:hidden;}
+.dt-thumb canvas{width:100%;height:100%;display:block;}
+.dt-ov{position:absolute;inset:0;background:linear-gradient(to bottom,rgba(0,0,0,.05),rgba(0,0,0,.6));}
+.dt-tl{position:absolute;bottom:13px;left:18px;right:18px;display:flex;align-items:flex-end;gap:12px;}
+.dt-ti{font-size:20px;font-weight:800;color:#fff;letter-spacing:-.025em;text-shadow:0 2px 8px rgba(0,0,0,.4);line-height:1.1;flex:1;}
+.dt-dt{font-size:12px;color:rgba(255,255,255,.5);flex-shrink:0;padding-bottom:3px;}
+.dt-sbadge{padding:3px 8px;border-radius:5px;font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;flex-shrink:0;padding-bottom:3px;}
+.sb-d{background:var(--go);color:#fff;}.sb-p{background:rgba(192,148,56,.9);color:#fff;}
+.sb-n{background:rgba(15,15,28,.7);color:rgba(255,255,255,.45);border:1px solid rgba(255,255,255,.1);backdrop-filter:blur(4px);}
+.dt-bd{flex:1;overflow-y:auto;padding:14px 18px 24px;}
+.dt-bd::-webkit-scrollbar{width:4px;}.dt-bd::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px;}
+.met-row{display:flex;border:1px solid var(--bd);border-radius:8px;overflow:hidden;margin-bottom:12px;}
+.met{flex:1;text-align:center;padding:9px 0;border-right:1px solid var(--bd);}.met:last-child{border-right:none;}
+.mv{font-size:18px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1;}
+.ml{font-size:9px;text-transform:uppercase;letter-spacing:.07em;color:var(--tx3);margin-top:3px;}
+.info-row{display:flex;gap:8px;margin-bottom:12px;}
+.info-box{flex:1;background:var(--sf2);border:1px solid var(--bd);border-radius:8px;padding:10px 12px;}
+.ib-l{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--tx3);margin-bottom:4px;}
+.ib-v{font-size:18px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1;}
+.ib-s{font-size:10px;color:var(--tx2);margin-top:2px;}
+.ib-pb{height:3px;background:var(--bd);border-radius:2px;overflow:hidden;margin-top:6px;}
+.ib-pf{height:100%;border-radius:2px;}
+.reel-box{flex:1;background:var(--gbg);border:1px solid var(--gbd);border-radius:8px;padding:10px 12px;}
+.rb-l{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--go);margin-bottom:4px;}
+.rb-v{font-size:18px;font-weight:700;letter-spacing:-.02em;color:var(--go);font-variant-numeric:tabular-nums;line-height:1.1;}
+.rb-s{font-size:10px;color:var(--tx2);margin-top:2px;}
+.sto-row{display:flex;align-items:center;gap:6px;background:var(--sf2);border:1px solid var(--bd);border-radius:8px;padding:10px 14px;margin-bottom:12px;}
+.sto-b{flex:1;text-align:center;}
+.sto-v{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.2;}
+.sto-l{font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--tx3);margin-top:2px;}
+.sto-a{font-size:16px;color:var(--tx3);}
+.sto-pct{background:var(--gbg);border:1px solid var(--gbd);border-radius:6px;padding:5px 12px;text-align:center;flex-shrink:0;}
+.sto-pct-v{font-size:20px;font-weight:800;color:var(--go);line-height:1;font-variant-numeric:tabular-nums;}
+.sto-pct-l{font-size:9px;color:var(--go);opacity:.7;text-transform:uppercase;letter-spacing:.06em;}
+.act-row{display:flex;gap:7px;}
+.btn{padding:8px 18px;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:filter .12s;flex:1;text-align:center;}
+.btn-pr{background:var(--ac);color:#fff;}.btn-pr:hover{filter:brightness(1.1);}
+.btn-gh{background:var(--sf2);color:var(--tx2);border:1px solid var(--bd);}.btn-gh:hover{color:var(--tx);}
+.btn-gn{background:var(--gbg);color:var(--go);border:1px solid var(--gbd);}.btn-gn:hover{background:var(--go);color:#fff;}
+.strip-hd{display:flex;align-items:center;justify-content:space-between;margin:14px 0 6px;}
+.strip-t{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--tx3);}
+.strip-lnk{font-size:11px;color:var(--ac);cursor:pointer;}.strip-lnk:hover{text-decoration:underline;}
+.strip{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;}
+.strip::-webkit-scrollbar{height:3px;}.strip::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px;}
+.sc-th{flex-shrink:0;width:112px;border-radius:6px;overflow:hidden;position:relative;border:1.5px solid var(--bd);cursor:pointer;transition:border-color .12s;}
+.sc-th:hover{border-color:var(--ac);}.sc-th.sel{border-color:var(--ac);box-shadow:0 0 0 2px var(--ari);}
+.sc-th canvas{width:112px;height:63px;display:block;}
+.sc-th-sc{position:absolute;top:4px;right:4px;padding:1px 4px;border-radius:3px;font-size:9px;font-weight:700;}
+.s3{background:var(--gbg);color:var(--go);}.s2{background:var(--wbg);color:var(--wa);}.s1{background:var(--lobg);color:var(--tx2);}
+.sc-th-ai{position:absolute;top:4px;left:4px;background:var(--ac);color:#fff;font-size:8px;font-weight:800;letter-spacing:.04em;padding:1px 4px;border-radius:3px;}
+.sc-th-d{position:absolute;bottom:3px;right:4px;background:rgba(0,0,0,.6);color:#fff;font-size:8px;font-family:ui-monospace,monospace;padding:1px 3px;border-radius:2px;}
+
+/* SCENE LIST (workbench list view) */
+.wb-body{flex:1;display:flex;overflow:hidden;}
+.wb-player{flex:1 1 auto;min-width:520px;border-left:1px solid var(--bd);display:flex;flex-direction:column;overflow:hidden;background:var(--surface);}
+.wpl-ph{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;color:var(--tx3);}
+.wpl-ph-ic{font-size:28px;opacity:.12;}
+.wpl-ph span{font-size:11px;}
+.wpl-body{flex:1;display:flex;flex-direction:column;overflow:hidden;}
+.wpl-video{background:#000;flex-shrink:0;}
+.wpl-video video{width:100%;display:block;max-height:72vh;}
+.wpl-info{padding:9px 12px;border-top:1px solid var(--bd);flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:5px;}
+.wpl-info::-webkit-scrollbar{width:3px;}.wpl-info::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px;}
+.wpl-file{font-family:ui-monospace,monospace;font-size:11px;font-weight:600;color:var(--tx2);}
+.wpl-tc{font-family:ui-monospace,monospace;font-size:10px;color:var(--tx3);}
+.wpl-tags{display:flex;gap:5px;align-items:center;flex-wrap:wrap;}
+.wpl-cap{font-size:11px;color:var(--tx2);line-height:1.5;}
+.wpl-acts{display:flex;gap:5px;margin-top:2px;}
+.wpl-inc{flex:1;padding:6px 0;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--bd);background:var(--sf2);color:var(--tx2);text-align:center;}
+.wpl-inc.on{background:var(--ac);border-color:var(--ac);color:#fff;}
+.wpl-nav{padding:5px 9px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid var(--bd);background:none;color:var(--tx2);}
+.wpl-nav:hover{color:var(--tx);}
+.slist{flex:1;overflow-y:auto;}
+.slist::-webkit-scrollbar{width:4px;}.slist::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px;}
+.srow{display:flex;align-items:center;border-bottom:1px solid var(--bd);cursor:pointer;transition:background .08s;min-height:48px;}
+.srow:hover{background:var(--sf2);}
+.srow.playing{background:var(--abg);}
+.sr-play{width:40px;flex-shrink:0;display:flex;align-items:center;justify-content:center;}
+.sr-pb{width:26px;height:26px;border-radius:50%;background:var(--sf3);border:1px solid var(--bd);display:flex;align-items:center;justify-content:center;color:var(--tx2);transition:background .1s,color .1s;flex-shrink:0;}
+.srow:hover .sr-pb{background:var(--ac);color:#fff;border-color:var(--ac);}
+.srow.playing .sr-pb{background:var(--go);color:#fff;border-color:var(--go);}
+.sr-info{flex:1;padding:7px 0 7px 4px;min-width:0;}
+.sr-r1{display:flex;align-items:center;gap:6px;margin-bottom:2px;overflow:hidden;}
+.sr-file{font-family:ui-monospace,monospace;font-size:11px;font-weight:600;color:var(--tx2);white-space:nowrap;flex-shrink:0;}
+.sr-tc{font-family:ui-monospace,monospace;font-size:10px;color:var(--tx3);white-space:nowrap;flex-shrink:0;}
+.sr-cap{font-size:11px;color:var(--tx3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.srow:hover .sr-cap,.srow.playing .sr-cap{color:var(--tx2);}
+.sr-dur{width:36px;flex-shrink:0;text-align:right;font-family:ui-monospace,monospace;font-size:10px;color:var(--tx3);padding-right:8px;}
+.sr-inc{width:54px;flex-shrink:0;display:flex;align-items:center;justify-content:center;gap:3px;}
+.inc-btn{width:30px;height:18px;border-radius:9px;cursor:pointer;display:flex;align-items:center;padding:0 2px;background:var(--sf3);border:1px solid var(--bd);flex-shrink:0;transition:background .12s,border-color .12s;}
+.inc-btn.on{background:var(--ac);border-color:var(--ac);}
+.inc-dot{width:13px;height:13px;border-radius:50%;background:var(--tx3);transition:transform .12s,background .12s;flex-shrink:0;}
+.inc-btn.on .inc-dot{transform:translateX(11px);background:#fff;}
+.inc-ord{font-family:ui-monospace,monospace;font-size:9px;color:var(--ac);font-weight:700;min-width:18px;}
+.ltag{font-size:8px;font-weight:800;letter-spacing:.04em;padding:1px 4px;border-radius:3px;flex-shrink:0;}
+.ltag.s3{background:var(--gbg);color:var(--go);}.ltag.s2{background:var(--wbg);color:var(--wa);}.ltag.s1{background:var(--lobg);color:var(--tx3);}
+.ltag-ai{font-size:8px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:1px 4px;border-radius:3px;background:var(--ac);color:#fff;flex-shrink:0;}
+
+/* VIDEO MODAL */
+.vmodal{position:fixed;inset:0;z-index:999;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.82);backdrop-filter:blur(6px);}
+.vmodal.open{display:flex;}
+.vbox{background:var(--surface);border:1px solid var(--bd);border-radius:10px;overflow:hidden;width:min(840px,94vw);box-shadow:0 24px 64px rgba(0,0,0,.6);display:flex;flex-direction:column;}
+.vhd{display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--bd);flex-shrink:0;}
+.vhd-t{flex:1;font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.vhd-m{font-family:ui-monospace,monospace;font-size:10px;color:var(--tx2);}
+.vcls{background:none;border:none;color:var(--tx2);font-size:16px;cursor:pointer;padding:2px 6px;line-height:1;border-radius:4px;flex-shrink:0;}
+.vcls:hover{background:var(--sf3);color:var(--tx);}
+.vplayer{background:#000;width:100%;}
+.vplayer video{width:100%;display:block;max-height:70vh;}
+
+/* ══ WORKBENCH ══ */
+.wb-bar{flex-shrink:0;height:38px;background:var(--surface);border-bottom:1px solid var(--bd);display:flex;align-items:stretch;padding:0 14px;}
+.wb-tnm{align-self:center;font-size:13px;font-weight:700;letter-spacing:-.015em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;flex-shrink:0;cursor:pointer;color:var(--tx);}
+.wb-tnm:hover{color:var(--ac);}
+.wb-tnm.empty{color:var(--tx3);font-weight:400;font-size:11px;}
+.wb-sep{width:1px;background:var(--bd);margin:8px 0 8px 10px;flex-shrink:0;}
+.wb-meta{display:flex;align-items:center;gap:10px;padding:0 14px;font-size:11px;color:var(--tx2);font-variant-numeric:tabular-nums;}
+.wb-meta b{color:var(--tx);}
+.wm-badge{font-size:9px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:1px 6px;border-radius:3px;}
+.wst{padding:0 13px;height:38px;display:flex;align-items:center;font-size:11px;font-weight:600;color:var(--tx3);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;}
+.wst:hover{color:var(--tx2);}.wst.on{color:var(--ac);border-bottom-color:var(--ac);}
+.wb-content{flex:0 0 300px;min-width:240px;display:flex;flex-direction:column;overflow:hidden;}
+@media (max-width:1100px){
+  .wb-content{flex:0 0 240px;min-width:200px;}
+  .wb-player{min-width:0;}
+}
+
+/* review */
+.phd{flex-shrink:0;background:var(--surface);border-bottom:1px solid var(--bd);}
+.phd-top{padding:11px 18px 8px;display:flex;align-items:flex-start;gap:14px;}
+.phd-t{font-size:14px;font-weight:700;letter-spacing:-.018em;}
+.phd-d{font-size:11px;color:var(--tx2);margin-top:1px;}
+.phd-m{display:flex;gap:10px;margin-top:4px;}
+.pm{font-size:11px;color:var(--tx2);}.pm b{color:var(--tx);font-variant-numeric:tabular-nums;}.pm .g{color:var(--go);}
+.phd-c{display:flex;align-items:center;gap:6px;flex-shrink:0;}
+.lbl{font-size:11px;color:var(--tx2);}
+.dur-in{background:var(--sf2);border:1px solid var(--bd);border-radius:5px;padding:3px 7px;color:var(--tx);font-family:ui-monospace,monospace;font-size:12px;width:50px;outline:none;}
+.dur-in:focus{border-color:var(--ac);}
+.btn-s{padding:5px 11px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:none;transition:filter .12s;}
+.bp{background:var(--ac);color:#fff;}.bp:hover{filter:brightness(1.1);}
+.bg{background:none;border:1px solid var(--bd);color:var(--tx2);}.bg:hover{color:var(--tx);}
+.tl-row{padding:6px 18px 7px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--bd);}
+.tl-w{flex:1;height:20px;position:relative;}
+.tl-t{position:absolute;top:5px;left:0;right:0;height:10px;background:var(--sf3);border-radius:3px;}
+.tl-s{font-size:11px;color:var(--tx2);min-width:82px;text-align:right;flex-shrink:0;font-variant-numeric:tabular-nums;}
+.tl-s .ok{color:var(--go);}.tl-s .ov{color:var(--dan);}
+.fr{flex-shrink:0;padding:6px 18px;display:flex;align-items:center;gap:5px;border-bottom:1px solid var(--bd);background:var(--bg);}
+.chip{padding:3px 9px;border-radius:14px;border:1px solid var(--bd);background:var(--sf2);font-size:11px;color:var(--tx2);cursor:pointer;}
+.chip:hover{color:var(--tx);border-color:var(--bd2);}.chip.on{background:var(--abg);border-color:var(--ac);color:var(--ac);font-weight:600;}
+.fr-sp{flex:1;}
+.ss{background:var(--sf2);border:1px solid var(--bd);border-radius:5px;padding:3px 7px;color:var(--tx2);font-size:11px;outline:none;cursor:pointer;}
+.sum{font-size:11px;color:var(--tx2);white-space:nowrap;font-variant-numeric:tabular-nums;}.sum b{color:var(--tx);}
+.cut-btn{background:var(--go);color:#fff;padding:5px 13px;border-radius:6px;font-size:12px;font-weight:700;border:none;cursor:pointer;display:flex;align-items:center;gap:5px;}
+.cut-btn:hover{filter:brightness(1.08);}.cut-btn:disabled{opacity:.35;cursor:not-allowed;filter:none;}
+.scroll{flex:1;overflow-y:auto;padding:10px 18px 18px;}
+.scroll::-webkit-scrollbar{width:4px;}.scroll::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px;}
+.loading{display:flex;align-items:center;justify-content:center;gap:8px;padding:40px;color:var(--tx2);font-size:12px;}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:9px;}
+.card{background:var(--surface);border:1.5px solid var(--bd);border-radius:7px;overflow:hidden;cursor:pointer;transition:border-color .12s,box-shadow .12s;}
+.card:hover{border-color:var(--bd2);}.card.sel{border-color:var(--ac);box-shadow:0 0 0 2px var(--ari);}
+.thumb{position:relative;aspect-ratio:16/9;overflow:hidden;}
+.thumb canvas{width:100%;height:100%;display:block;}
+.pov{position:absolute;inset:0;background:rgba(0,0,0,.15);display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .1s;}
+.card:hover .pov{opacity:1;}
+.pr{width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,.88);display:flex;align-items:center;justify-content:center;}
+.ai-b{position:absolute;top:4px;left:4px;background:var(--ac);color:#fff;font-size:8px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;padding:1px 4px;border-radius:3px;}
+.sc-b{position:absolute;top:4px;right:4px;padding:1px 4px;border-radius:3px;font-size:9px;font-weight:700;}
+.dur-b{position:absolute;bottom:3px;right:4px;background:rgba(0,0,0,.6);color:#fff;font-size:8px;font-family:ui-monospace,monospace;padding:1px 3px;border-radius:2px;}
+.cbw{padding:6px 8px 7px;}
+.cr1{display:flex;align-items:center;gap:4px;margin-bottom:2px;}
+.cf{font-family:ui-monospace,monospace;font-size:9px;color:var(--tx3);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cts{font-family:ui-monospace,monospace;font-size:9px;color:var(--tx2);white-space:nowrap;}
+.ccap{font-size:11px;color:var(--tx2);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.cft{display:flex;align-items:center;margin-top:4px;gap:4px;}
+.cb{width:12px;height:12px;border:1.5px solid var(--bd);border-radius:3px;background:var(--sf2);display:flex;align-items:center;justify-content:center;}
+.card.sel .cb{background:var(--ac);border-color:var(--ac);}.cb svg{display:none;}.card.sel .cb svg{display:block;}
+.cord{font-family:ui-monospace,monospace;font-size:9px;color:var(--ac);font-weight:700;margin-left:auto;display:none;}.card.sel .cord{display:block;}
+
+/* cutting */
+.cut-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden;}
+.cut-hd{flex-shrink:0;padding:12px 18px;background:var(--surface);border-bottom:1px solid var(--bd);display:flex;align-items:flex-start;gap:14px;}
+.cut-ti{font-size:14px;font-weight:700;letter-spacing:-.018em;}.cut-su{font-size:12px;color:var(--tx2);margin-top:2px;}
+.cut-body{flex:1;display:flex;overflow:hidden;}
+.cut-l{flex:1;padding:13px 18px;border-right:1px solid var(--bd);overflow-y:auto;display:flex;flex-direction:column;gap:11px;}
+.cut-r{width:210px;flex-shrink:0;padding:12px 13px;display:flex;flex-direction:column;gap:9px;}
+.seclbl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--tx3);margin-bottom:6px;}
+.spl{display:flex;flex-direction:column;gap:5px;}
+.spli{display:flex;align-items:center;gap:7px;}
+.spld{width:15px;height:15px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;}
+.dd{background:var(--go);}.da{background:var(--ac);animation:pulse 1.2s ease-in-out infinite;}.dw{background:var(--sf3);border:1.5px solid var(--bd);}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+.splinf{flex:1;}.spln{font-size:11px;font-family:ui-monospace,monospace;}.splsub{font-size:10px;color:var(--tx2);}
+.spldur{font-size:10px;font-family:ui-monospace,monospace;white-space:nowrap;}
+.term{background:#0a0f0a;border:1px solid rgba(68,255,136,.1);border-radius:7px;padding:10px 12px;font-family:ui-monospace,monospace;font-size:10.5px;line-height:1.65;color:#44ff88;min-height:140px;max-height:260px;overflow-y:auto;flex-shrink:0;}
+.term::-webkit-scrollbar{width:3px;}.term::-webkit-scrollbar-thumb{background:#2a5c38;border-radius:2px;}
+.tdim{color:#2a5c38;}.tok{color:#44ff88;}.tacc{color:#88ccff;}.terr{color:#ff6666;}
+.tcur{display:inline-block;width:6px;height:11px;background:#44ff88;margin-left:1px;animation:blink .9s step-end infinite;vertical-align:text-bottom;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+.sc-card{background:var(--sf2);border:1px solid var(--bd);border-radius:7px;padding:9px 11px;}
+.sclbl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--tx3);margin-bottom:6px;}
+.scrow{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px;}.scrow:last-child{margin-bottom:0;}
+.sck{font-size:11px;color:var(--tx2);}.scv{font-size:11px;color:var(--tx);font-variant-numeric:tabular-nums;}.scv.g{color:var(--go);}
+.minitl{height:4px;background:var(--bd);border-radius:2px;overflow:hidden;margin-top:6px;}
+.minif{height:100%;background:var(--go);border-radius:2px;transition:width .3s;}
+
+/* done */
+.done-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden;}
+.done-hd{flex-shrink:0;background:var(--surface);border-bottom:1px solid var(--bd);padding:12px 18px;display:flex;align-items:flex-start;gap:12px;}
+.done-ic{width:32px;height:32px;background:var(--gbg);border:1px solid var(--gbd);border-radius:7px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.done-ti{font-size:14px;font-weight:700;letter-spacing:-.018em;}
+.done-su{font-size:12px;color:var(--tx2);margin-top:2px;}
+.done-ac{display:flex;gap:6px;margin-top:7px;}
+.done-bd{flex:1;overflow-y:auto;padding:13px 18px;display:grid;grid-template-columns:1fr 1fr;gap:10px;align-content:start;}
+.done-bd::-webkit-scrollbar{width:4px;}.done-bd::-webkit-scrollbar-thumb{background:var(--bd);border-radius:2px;}
+.rc{background:var(--surface);border:1px solid var(--bd);border-radius:8px;overflow:hidden;}
+.rc-th{aspect-ratio:16/9;overflow:hidden;position:relative;}.rc-th canvas{width:100%;height:100%;display:block;}
+.rc-play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.2);}
+.rc-pb{width:36px;height:36px;border-radius:50%;background:rgba(79,121,224,.85);border:none;cursor:pointer;color:#fff;display:flex;align-items:center;justify-content:center;}
+.rc-pb:hover{background:var(--ac);}
+.rc-bd{padding:8px 10px 9px;}.rc-ti{font-size:12px;font-weight:600;margin-bottom:3px;}
+.rc-st{display:flex;gap:8px;flex-wrap:wrap;}.rcs{font-size:11px;color:var(--tx2);}.rcs b{color:var(--tx);font-variant-numeric:tabular-nums;}
+.rc-pa{font-family:ui-monospace,monospace;font-size:9px;color:var(--tx3);margin-top:4px;word-break:break-all;}
+.sto-card{background:var(--surface);border:1px solid var(--bd);border-radius:8px;padding:9px 11px;}
+.next-card{background:var(--abg);border:1px solid var(--ari);border-radius:8px;padding:11px 12px;}
+.nc-t{font-size:12px;font-weight:600;color:var(--ac);margin-bottom:6px;}
+.ncr{display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--surface);border:1px solid var(--bd);border-radius:6px;cursor:pointer;margin-bottom:3px;}
+.ncr:last-child{margin-bottom:0;}.ncr:hover{border-color:var(--ac);}
+.ncn{font-size:12px;font-weight:500;flex:1;}.ncm{font-size:10px;color:var(--tx2);}
+.empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;}
+.ei{font-size:32px;opacity:.18;}.em{font-size:13px;color:var(--tx3);}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="tb-logo">
+    <div class="lm"><span></span><span></span><span></span><span></span></div>
+    <div class="ln">Highlights <em>/ Pipeline</em></div>
+  </div>
+  <div class="tb-nav">
+    <div class="ntab on" id="n-ov" onclick="switchTab('ov')">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x=".5" y=".5" width="4.5" height="4.5" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="7" y=".5" width="4.5" height="4.5" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x=".5" y="7" width="4.5" height="4.5" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="7" y="7" width="4.5" height="4.5" rx="1" stroke="currentColor" stroke-width="1.2"/></svg>
+      Overview
+    </div>
+    <div class="ntab" id="n-wb" onclick="switchTab('wb')">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x=".5" y=".5" width="4" height="11" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="6.5" y=".5" width="5" height="11" rx="1" stroke="currentColor" stroke-width="1.2"/></svg>
+      Workbench
+    </div>
+  </div>
+  <div class="tb-mid">
+    <span class="tbs" id="tb-trips">—</span>
+    <div class="tb-prog-wrap">
+      <div class="pt"><div class="pt-d" id="pt-d" style="flex:0"></div><div class="pt-p" id="pt-p" style="flex:0"></div><div id="pt-n" style="flex:1;background:var(--bd)"></div></div>
+      <span class="pl" id="tb-prog">loading…</span>
+    </div>
+  </div>
+  <div class="tb-end">
+    <button class="tb-btn" onclick="toggleTheme()">☀︎ ☾</button>
+  </div>
+</div>
+
+<div class="shell">
+
+  <!-- ══ OVERVIEW ══ -->
+  <div class="pane on" id="pane-ov">
+    <div class="ov-left">
+      <div class="ov-bar">
+        <button class="ft on"  onclick="setOVF('all',this)">All</button>
+        <button class="ft g"   onclick="setOVF('done',this)">Done</button>
+        <button class="ft w"   onclick="setOVF('partial',this)">Active</button>
+        <button class="ft"     onclick="setOVF('none',this)">Pending</button>
+      </div>
+      <div class="ov-list" id="ov-list"><div class="loading">Loading…</div></div>
+    </div>
+    <div class="ov-right" id="ov-right">
+      <div class="ov-empty"><div class="oe-i">🎬</div><div class="oe-m">Select a trip</div></div>
+    </div>
+  </div>
+
+  <!-- ══ WORKBENCH ══ -->
+  <div class="pane" id="pane-wb" style="flex-direction:column">
+    <div class="wb-bar">
+      <span class="wb-tnm empty" id="wb-tnm" onclick="switchTab('ov')" title="Back to Overview">← select a trip in Overview</span>
+      <div class="wb-sep"></div>
+      <div class="wb-meta" id="wb-meta"></div>
+      <div style="flex:1"></div>
+      <div class="wst on" id="wst-review"  onclick="goState('review')">① Review</div>
+      <div class="wst"    id="wst-cut"     onclick="goState('cut')">② Cutting</div>
+      <div class="wst"    id="wst-done"    onclick="goState('done')">③ Done</div>
+    </div>
+    <div class="wb-body">
+      <div class="wb-content" id="wb-content">
+        <div class="empty"><div class="ei">🎬</div><div class="em">Select a trip in Overview first</div></div>
+      </div>
+      <div class="wb-player" id="wb-player">
+        <div class="wpl-ph" id="wpl-ph">
+          <div class="wpl-ph-ic">▶</div>
+          <span>Select a scene to preview</span>
+        </div>
+        <div class="wpl-body" id="wpl-body" style="display:none">
+          <div class="wpl-video"><video id="vmov-wb" controls preload="metadata"></video></div>
+          <div class="wpl-info" id="wpl-info"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- VIDEO MODAL -->
+<div class="vmodal" id="vmodal" onclick="closeVid(event)">
+  <div class="vbox" onclick="event.stopPropagation()">
+    <div class="vhd">
+      <span class="vhd-t" id="vhd-t">—</span>
+      <span class="vhd-m" id="vhd-m"></span>
+      <button class="vcls" onclick="closeVid()">✕</button>
+    </div>
+    <div class="vplayer"><video id="vmov" controls preload="metadata"></video></div>
+  </div>
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────
+let TRIPS = [];
+const SCENES = {};        // trip_id -> array (cached)
+const sel   = {};         // trip_id -> Set of scene IDs (in selection order)
+const selOrd = {};        // trip_id -> Map<scene_id, order>
+const selCtr = {};        // trip_id -> counter
+let activeTab = 'ov', ovF = 'all', ovActive = null;
+let wbActive = null; // always mirrors ovActive when switching to WB
+const collapsedYears = new Set(); // years the user has folded
+let sfF = 'all', ssS = 'timeline', wbSt = 'review';
+let cutJob = null;        // current SSE EventSource
+let wbPlayerSid = null, wbPlayerTid = null;  // currently previewed scene
+
+// ── Utils ──────────────────────────────────────────────────────────────
+const fmt = s => { s = Math.round(s); const m = Math.floor(s/60); return m ? `${m}:${String(s%60).padStart(2,'0')}` : `${s}s`; };
+const fmtM = s => { const m = Math.round(s/60); return m >= 60 ? `${(m/60).toFixed(1)}h` : `${m}m`; };
+const sCol = s => s >= 2.5 ? 'var(--go)' : s >= 1.5 ? 'var(--wa)' : 'var(--tx3)';
+const sCls = s => s >= 2.5 ? 's3' : s >= 1.5 ? 's2' : 's1';
+const selDur = id => (SCENES[id]||[]).filter(s => sel[id]?.has(s.id)).reduce((a,s) => a + s.dur, 0);
+const parseTgt = v => { v=(v||'3m').trim(); if(v.endsWith('m')) return +v*60; if(v.endsWith('s')) return +v; if(v.includes(':')) return +v.split(':')[0]*60 + +v.split(':')[1]; return +v*60||180; };
+const getTgt = () => parseTgt(document.getElementById('dur-in')?.value);
+
+function draw(c, [r,g,b]) {
+  if (!c) return;
+  const ctx = c.getContext('2d'), w = c.width, h = c.height;
+  const gr = ctx.createLinearGradient(0,0,w,h);
+  gr.addColorStop(0, `rgb(${r},${g},${b})`);
+  gr.addColorStop(1, `rgb(${Math.max(0,r-40)},${Math.max(0,g-40)},${Math.max(0,b-40)})`);
+  ctx.fillStyle = gr; ctx.fillRect(0,0,w,h);
+  ctx.fillStyle = 'rgba(255,255,255,.025)';
+  for (let i=0; i<80; i++) ctx.fillRect(Math.random()*w, Math.random()*h, 1+Math.random(), 1+Math.random());
+  const v = ctx.createRadialGradient(w/2,h*.65,h*.04,w/2,h*.65,h*.9);
+  v.addColorStop(0,'rgba(0,0,0,0)'); v.addColorStop(1,'rgba(0,0,0,.52)');
+  ctx.fillStyle = v; ctx.fillRect(0,0,w,h);
+}
+const paintAll = () => document.querySelectorAll('canvas[data-color]').forEach(c => draw(c, c.dataset.color.split(',').map(Number)));
+
+// ── Bootstrap ─────────────────────────────────────────────────────────
+async function init() {
+  const trips = await fetch('/api/trips').then(r => r.json());
+  TRIPS = trips;
+  trips.forEach(t => {
+    if (!sel[t.id]) { sel[t.id] = new Set(); selOrd[t.id] = new Map(); selCtr[t.id] = 1; }
+  });
+  updateTopbar();
+  renderOVList();
+  if (TRIPS.length) selectOV(TRIPS[0].id);
+}
+
+function updateTopbar() {
+  const n = TRIPS.length;
+  const done = TRIPS.filter(t => t.status === 'done').length;
+  const clips = TRIPS.reduce((a,t) => a+t.clips, 0);
+  const scenes = TRIPS.reduce((a,t) => a+t.scene_count, 0);
+  document.getElementById('tb-trips').innerHTML = `<b>${n}</b> trips · <b>${clips}</b> clips · <b>${scenes}</b> scenes`;
+  document.getElementById('pt-d').style.flex = done;
+  document.getElementById('pt-n').style.flex = Math.max(0, n - done);
+  document.getElementById('tb-prog').innerHTML = `<b>${done}</b> done · <b>${n-done}</b> pending`;
+}
+
+// ── OVERVIEW list ──────────────────────────────────────────────────────
+function toggleYear(yr) {
+  collapsedYears.has(yr) ? collapsedYears.delete(yr) : collapsedYears.add(yr);
+  renderOVList();
+}
+function renderOVList() {
+  let trips = [...TRIPS];
+  if (ovF === 'done')    trips = trips.filter(t => t.status === 'done');
+  if (ovF === 'partial') trips = trips.filter(t => t.status === 'partial');
+  if (ovF === 'none')    trips = trips.filter(t => t.status === 'none');
+  // Group by year, newest first
+  const byYear = {};
+  trips.forEach(t => {
+    const yr = t.date.split(' ').pop() || '?';
+    (byYear[yr] = byYear[yr] || []).push(t);
+  });
+  const years = Object.keys(byYear).sort((a,b) => +b - +a);
+  const html = years.map(yr => {
+    const collapsed = collapsedYears.has(yr);
+    const rows = collapsed ? '' : byYear[yr].map(tripRow).join('');
+    return `<div class="grp${collapsed?' collapsed':''}" onclick="toggleYear('${yr}')">
+      <span class="grp-arr">▾</span>${yr}<span style="opacity:.45;font-weight:400;letter-spacing:0">(${byYear[yr].length})</span>
+    </div><div class="grp-trips"${collapsed?' style="display:none"':''}>${rows}</div>`;
+  }).join('');
+  document.getElementById('ov-list').innerHTML = html || '<div class="loading" style="color:var(--tx3)">No trips</div>';
+}
+function tripRow(t) {
+  const isOn = t.id === ovActive;
+  const col = t.status==='done'?'var(--go)':t.status==='partial'?'var(--wa)':'var(--tx3)';
+  const bc  = t.status==='done'?'bd-d':t.status==='partial'?'bd-p':'bd-n';
+  const bt  = t.status==='done'?'Done':t.status==='partial'?'Active':'Pending';
+  return `<div class="tr${isOn?' on':''}${isOn&&t.status==='done'?' d':''}" onclick="selectOV('${t.id}')">
+    <div class="tr-col" style="background:${col}"></div>
+    <div class="tr-main">
+      <div class="tr-r1"><span class="tr-nm">${t.name}</span><span class="badge ${bc}">${bt}</span></div>
+      <div class="tr-rail"><div class="rh" style="flex:${t.high}"></div><div class="rm" style="flex:${t.mid}"></div><div class="rl" style="flex:${t.low||1}"></div></div>
+      <div class="tr-st"><span><b>${t.clips}</b> clips</span><span>·</span><span>${fmtM(t.footage_sec)}</span><span>·</span><span><b>${t.high}</b>▲</span></div>
+    </div>
+    <span class="tr-arr">›</span>
+  </div>`;
+}
+function setOVF(f, el) { ovF = f; document.querySelectorAll('.ov-bar .ft').forEach(b=>b.classList.remove('on')); el.classList.add('on'); renderOVList(); }
+
+// ── OVERVIEW detail ────────────────────────────────────────────────────
+async function selectOV(id) {
+  ovActive = id;
+  renderOVList();
+  const t = TRIPS.find(x => x.id === id);
+  const r = document.getElementById('ov-right');
+  // Load scenes lazily for strip
+  if (!SCENES[id]) {
+    r.innerHTML = `<div class="ov-empty"><div class="oe-m" style="color:var(--tx2)">Loading…</div></div>`;
+    SCENES[id] = await fetch(`/api/scenes?trip=${id}`).then(r=>r.json());
+    sel[id] = new Set(SCENES[id].filter(s=>s.ai).map(s=>s.id));
+    selOrd[id] = new Map([...sel[id]].map((sid,i)=>[sid,i+1])); selCtr[id] = sel[id].size+1;
+  }
+  renderOVDetail(id);
+}
+function renderOVDetail(id) {
+  const t = TRIPS.find(x=>x.id===id);
+  const r = document.getElementById('ov-right');
+  const est = t.reel_mb || Math.round(selDur(id)*0.4);
+  const sv  = Math.round((1-(est/(t.raw_gb*1000)))*100);
+  const bc  = t.status==='done'?'sb-d':t.status==='partial'?'sb-p':'sb-n';
+  const bt  = t.status==='done'?'Done':t.status==='partial'?'In progress':'Pending';
+  let mid = t.status==='done'
+    ? `<div class="info-row"><div class="reel-box"><div class="rb-l">Reel</div><div class="rb-v">${t.reel_mb} MB</div><div class="rb-s">highlight.mp4 · ready</div></div><div class="info-box"><div class="ib-l">Scenes</div><div class="ib-v">${t.scene_count}</div><div class="ib-s">${t.high} high · ${t.mid} mid</div></div></div>`
+    : (() => {
+        const sv2 = selDur(id), tg = t.high > 0 ? t.high*10 : 180, pct = Math.min(100, sv2/tg*100);
+        const col = sel[id]?.size ? 'var(--ac)' : 'var(--tx3)';
+        return `<div class="info-row"><div class="info-box"><div class="ib-l">Selection</div><div class="ib-v" style="color:${col}">${fmt(sv2)}</div><div class="ib-s">${sel[id]?.size||0} of ${(SCENES[id]||[]).length} scenes</div><div class="ib-pb"><div class="ib-pf" style="width:${pct.toFixed(0)}%;background:${col}"></div></div></div><div class="info-box"><div class="ib-l">AI picks</div><div class="ib-v">${t.high}</div><div class="ib-s">${t.scene_count} scenes total</div></div></div>`;
+      })();
+  const btns = t.status==='done'
+    ? `<button class="btn btn-gn" onclick="openWB('${id}','done')">▶ View reel</button><button class="btn btn-gh" onclick="openWB('${id}','review')">Edit</button>`
+    : `<button class="btn btn-pr" onclick="openWB('${id}','review')">Open in Workbench</button>`;
+  const scenes = SCENES[id] || [];
+  const strip = scenes.length ? `
+    <div class="strip-hd"><span class="strip-t">Scenes (${scenes.length})</span><span class="strip-lnk" onclick="openWB('${id}','review')">Open all →</span></div>
+    <div class="strip">${scenes.slice(0,40).map(s=>`<div class="sc-th${sel[id]?.has(s.id)?' sel':''}" onclick="openWB('${id}','review')">
+      <canvas width="224" height="126" data-color="${s.color.join(',')}"></canvas>
+      ${s.ai?'<div class="sc-th-ai">AI</div>':''}
+      <div class="sc-th-sc ${sCls(s.score)}">${s.score.toFixed(1)}</div>
+      <div class="sc-th-d">${fmt(s.dur)}</div>
+    </div>`).join('')}</div>` : '';
+  r.innerHTML = `
+    <div class="dt-hd">
+      <div class="dt-thumb"><canvas width="800" height="250" data-color="${t.color.join(',')}"></canvas>
+        <div class="dt-ov"></div>
+        <div class="dt-tl"><div class="dt-ti">${t.name}</div><div class="dt-dt">${t.date}</div><div class="dt-sbadge ${bc}">${bt}</div></div>
+      </div>
+    </div>
+    <div class="dt-bd">
+      <div class="met-row">
+        <div class="met"><div class="mv">${t.clips}</div><div class="ml">Clips</div></div>
+        <div class="met"><div class="mv">${fmtM(t.footage_sec)}</div><div class="ml">Footage</div></div>
+        <div class="met"><div class="mv">${t.scene_count}</div><div class="ml">Scenes</div></div>
+        <div class="met"><div class="mv">${t.high}</div><div class="ml">High</div></div>
+        <div class="met"><div class="mv">${t.raw_gb}GB</div><div class="ml">Raw</div></div>
+      </div>
+      ${mid}
+      <div class="sto-row">
+        <div class="sto-b"><div class="sto-v" style="color:var(--tx2)">${t.raw_gb} GB</div><div class="sto-l">Raw</div></div>
+        <div class="sto-a">→</div>
+        <div class="sto-b"><div class="sto-v" style="color:var(--go)">${t.reel_mb ? t.reel_mb+'MB' : '~'+est+'MB'}</div><div class="sto-l">${t.reel_mb?'Reel':'Est.'}</div></div>
+        <div class="sto-pct"><div class="sto-pct-v">${sv}%</div><div class="sto-pct-l">saved</div></div>
+      </div>
+      <div class="act-row">${btns}</div>
+      ${strip}
+    </div>`;
+  requestAnimationFrame(paintAll);
+}
+function openWB(id, st) { ovActive = id; renderOVList(); switchTab('wb'); goState(st); }
+
+// ── WORKBENCH meta bar ────────────────────────────────────────────────
+function updateWBMeta(id) {
+  const tnm = document.getElementById('wb-tnm');
+  const el  = document.getElementById('wb-meta');
+  if (!id) {
+    tnm.textContent = '← select a trip in Overview'; tnm.classList.add('empty');
+    el.innerHTML = ''; return;
+  }
+  const t = TRIPS.find(x=>x.id===id);
+  tnm.textContent = t.name; tnm.classList.remove('empty');
+  const bc = t.status==='done'?'bd-d':t.status==='partial'?'bd-p':'bd-n';
+  const bt = t.status==='done'?'Done':t.status==='partial'?'Active':'Pending';
+  const s  = sel[id], sd = selDur(id);
+  el.innerHTML = `<span class="wm-badge ${bc}">${bt}</span><span><b>${t.clips}</b> clips</span><span><b>${fmtM(t.footage_sec)}</b></span><span><b>${t.high}</b> high</span><span style="color:var(--tx3)">${s?.size||0} sel · ${fmt(sd)}</span>`;
+}
+
+// ── WORKBENCH trip activate ───────────────────────────────────────────
+async function selectTrip(id) {
+  if (!id) { updateWBMeta(null); return; }
+  wbActive = id; sfF = 'all'; ssS = 'timeline';
+  // Reset inline player
+  wbPlayerSid = null; wbPlayerTid = null;
+  const vwb = document.getElementById('vmov-wb');
+  if (vwb) { vwb.pause(); vwb.src = ''; }
+  const ph = document.getElementById('wpl-ph'), pb = document.getElementById('wpl-body');
+  if (ph) ph.style.display = ''; if (pb) pb.style.display = 'none';
+  updateWBMeta(id);
+  if (!SCENES[id]) {
+    setContent('<div class="loading">Loading scenes…</div>');
+    SCENES[id] = await fetch(`/api/scenes?trip=${id}`).then(r=>r.json());
+    sel[id]    = new Set(SCENES[id].filter(s=>s.ai).map(s=>s.id));
+    selOrd[id] = new Map([...sel[id]].map((sid,i)=>[sid,i+1])); selCtr[id] = sel[id].size+1;
+    updateWBMeta(id);
+  }
+  goState('review');
+}
+
+function goState(st) {
+  wbSt = st;
+  ['review','cut','done'].forEach(s => document.getElementById('wst-'+s)?.classList.toggle('on', s===st));
+  if (st==='review') renderReview();
+  else if (st==='cut') renderCut();
+  else renderDone();
+}
+function setContent(html) { document.getElementById('wb-content').innerHTML = html; }
+
+// ── REVIEW ────────────────────────────────────────────────────────────
+function renderReview() {
+  if (!wbActive) { setContent('<div class="empty"><div class="ei">🎬</div><div class="em">Select a trip above</div></div>'); return; }
+  const t = TRIPS.find(x=>x.id===wbActive);
+  const sc = SCENES[wbActive] || [];
+  if (!sc.length) { setContent('<div class="empty"><div class="ei">📂</div><div class="em">No scenes</div></div>'); return; }
+  const s = sel[wbActive], sv = selDur(wbActive), tg = getTgt()||180, pct = Math.min(100, sv/tg*100);
+  const mxS = t.footage_sec || 60;
+  const tlSegs = sc.map(x => {
+    const L = x.start/mxS*100, W = Math.max((x.dur)/mxS*100, .4);
+    return `<div onclick="event.stopPropagation();tog('${t.id}','${x.id}')" style="position:absolute;left:${L}%;width:${W}%;top:0;bottom:0;background:${s.has(x.id)?sCol(x.score):'var(--bd2)'};border-radius:2px;cursor:pointer;transition:background .15s"></div>`;
+  }).join('');
+  let scenes = [...sc];
+  if (sfF==='ai')  scenes = scenes.filter(x=>x.ai);
+  if (sfF==='sel') scenes = scenes.filter(x=>s.has(x.id));
+  if (sfF==='hi')  scenes = scenes.filter(x=>x.score>=2.5);
+  if (sfF==='lo')  scenes = scenes.filter(x=>x.score<1.5);
+  if (ssS==='score') scenes = [...scenes].sort((a,b)=>b.score-a.score);
+  if (ssS==='dur')   scenes = [...scenes].sort((a,b)=>b.dur-a.dur);
+  setContent(`
+    <div class="phd">
+      <div class="phd-top">
+        <div style="flex:1">
+          <div class="phd-t">${t.name}</div><div class="phd-d">${t.date}</div>
+          <div class="phd-m"><span class="pm"><b>${t.clips}</b> clips</span><span class="pm"><b>${fmtM(t.footage_sec)}</b></span><span class="pm"><b class="g">${t.high}</b> high</span><span class="pm"><b>${sc.length}</b> scenes</span></div>
+        </div>
+        <div class="phd-c">
+          <span class="lbl">Target</span>
+          <input class="dur-in" id="dur-in" value="3m" oninput="updTl()"/>
+          <button class="btn-s bp" onclick="autoSel('${t.id}')">Auto</button>
+          <button class="btn-s bg" onclick="clrSel('${t.id}')">Clear</button>
+        </div>
+      </div>
+      <div class="tl-row">
+        <div class="tl-w"><div class="tl-t" id="tl" style="position:relative;height:100%">${tlSegs}</div></div>
+        <div class="tl-s" id="tls">${s.size>0?`<span class="${pct>100?'ov':'ok'}">${fmt(sv)}</span> / ${fmt(tg)}`:'<span style="color:var(--tx3)">nothing selected</span>'}</div>
+      </div>
+    </div>
+    <div class="fr">
+      ${[['all','All'],['ai','AI'],['sel','Selected'],['hi','Score ≥2.5'],['lo','Low']].map(([f,l])=>`<button class="chip${sfF===f?' on':''}" onclick="setSF('${f}')">${l}</button>`).join('')}
+      <div class="fr-sp"></div>
+      <span class="sum" id="sum"><b>${s.size}</b> sel · <b>${fmt(sv)}</b></span>&nbsp;
+      <select class="ss" onchange="setSS(this.value)"><option value="timeline">Timeline</option><option value="score">Score ↓</option><option value="dur">Duration ↓</option></select>
+      <button class="cut-btn" id="cut-btn" ${s.size===0?'disabled':''} onclick="startCut('${t.id}')">
+        <svg width="7" height="9" viewBox="0 0 7 9"><path d="M1.5 1l4 3.5-4 3.5z" fill="currentColor"/></svg> Cut ${s.size} scenes
+      </button>
+    </div>
+    <div class="slist">
+      ${scenes.map(x => {
+        const on = s.has(x.id);
+        const ord = selOrd[t.id].get(x.id);
+        return `<div class="srow${wbPlayerSid==x.id?' playing':''}" data-sid="${x.id}" data-path="${encodeURIComponent(x.path)}" data-start="${x.start}" data-end="${x.end}" data-file="${encodeURIComponent(x.file)}" data-tid="${t.id}" onclick="playRow(this)">
+          <div class="sr-play"><div class="sr-pb"><svg width="7" height="9" viewBox="0 0 7 9"><path d="M1.5 1l4 3.5-4 3.5z" fill="currentColor"/></svg></div></div>
+          <div class="sr-info">
+            <div class="sr-r1">
+              <span class="sr-file">${x.file}</span>
+              <span class="sr-tc">${fmt(x.start)}–${fmt(x.end)}</span>
+              <span class="ltag ${sCls(x.score)}">${x.score.toFixed(1)}</span>
+              ${x.ai ? '<span class="ltag-ai">AI</span>' : ''}
+            </div>
+            <div class="sr-cap">${x.caption}</div>
+          </div>
+          <div class="sr-dur">${fmt(x.dur)}</div>
+          <div class="sr-inc" onclick="event.stopPropagation();tog('${t.id}','${x.id}')">
+            <div class="inc-btn${on?' on':''}" title="${on?'Remove from reel':'Add to reel'}"><div class="inc-dot"></div></div>
+            <span class="inc-ord">${on?`#${ord}`:''}</span>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`);
+}
+function updTl() {
+  if (!wbActive) return;
+  const s = sel[wbActive], sv = selDur(wbActive), tg = getTgt()||180, pct = Math.min(100,sv/tg*100);
+  document.getElementById('tls').innerHTML = s.size>0?`<span class="${pct>100?'ov':'ok'}">${fmt(sv)}</span> / ${fmt(tg)}`:'<span style="color:var(--tx3)">nothing selected</span>';
+  document.getElementById('sum').innerHTML = `<b>${s.size}</b> sel · <b>${fmt(sv)}</b>`;
+  const btn = document.getElementById('cut-btn');
+  if (btn) { btn.disabled = s.size===0; btn.textContent = s.size===0 ? '▶ Cut' : `▶ Cut ${s.size} scenes`; }
+  const t = TRIPS.find(x=>x.id===wbActive);
+  (SCENES[wbActive]||[]).forEach((sc,i) => { const el=document.querySelectorAll('#tl>div')[i]; if(el) el.style.background=sel[wbActive].has(sc.id)?sCol(sc.score):'var(--bd2)'; });
+}
+function tog(tid, sid) {
+  const s = sel[tid];
+  if (s.has(sid)) { s.delete(sid); selOrd[tid].delete(sid); }
+  else { s.add(sid); selOrd[tid].set(sid, selCtr[tid]++); }
+  const row = document.querySelector(`[data-sid="${sid}"]`);
+  if (row) {
+    const btn = row.querySelector('.inc-btn');
+    const ord = row.querySelector('.inc-ord');
+    if (btn) btn.classList.toggle('on', s.has(sid));
+    if (ord) ord.textContent = s.has(sid) ? `#${selOrd[tid].get(sid)}` : '';
+  }
+  // Sync player panel if this scene is currently showing
+  if (String(wbPlayerSid) === String(sid) && String(wbPlayerTid) === String(tid)) {
+    const on = s.has(sid);
+    const pbtn = document.getElementById('wpl-inc-btn');
+    if (pbtn) {
+      pbtn.classList.toggle('on', on);
+      pbtn.textContent = on ? `✓ In reel #${selOrd[tid].get(sid)}` : '+ Include in reel';
+    }
+  }
+  updTl(); updateWBMeta(tid);
+}
+function setSF(f) { sfF=f; renderReview(); }
+function setSS(v) { ssS=v; renderReview(); }
+function autoSel(tid) {
+  const scenes = SCENES[tid]||[], tg = getTgt()||180;
+  sel[tid].clear(); selOrd[tid].clear(); selCtr[tid]=1;
+  // Pick by score, then re-sort picks by timeline position so the reel is chronological
+  const picked = new Set();
+  [...scenes].sort((a,b)=>b.score-a.score).reduce((tot,s)=>{
+    if (tot+s.dur<=tg*1.18) { picked.add(s.id); return tot+s.dur; } return tot;
+  }, 0);
+  scenes.filter(s=>picked.has(s.id)).forEach(s => { sel[tid].add(s.id); selOrd[tid].set(s.id,selCtr[tid]++); });
+  renderReview(); updateWBMeta(tid);
+}
+function clrSel(tid) { sel[tid].clear(); selOrd[tid].clear(); selCtr[tid]=1; renderReview(); updateWBMeta(tid); }
+
+// ── CUT (SSE) ─────────────────────────────────────────────────────────
+let _cutMeta = {};  // {n, dur, scenes: []}
+
+async function startCut(tid) {
+  const scenes = SCENES[tid]||[];
+  // Build ordered list from selOrd
+  const ordList = [...selOrd[tid].entries()].sort((a,b)=>a[1]-b[1]).map(([id])=>id);
+  if (!ordList.length) return;
+
+  _cutMeta = { tid, n: ordList.length, dur: selDur(tid), scenes: scenes.filter(s=>sel[tid].has(s.id)), done: 0 };
+  goState('cut');
+
+  const resp = await fetch('/api/cut', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({trip: tid, scenes: ordList})
+  });
+  const {job_id} = await resp.json();
+
+  if (cutJob) cutJob.close();
+  cutJob = new EventSource(`/api/job/${job_id}`);
+  cutJob.onmessage = e => handleCutEvent(JSON.parse(e.data));
+  cutJob.onerror   = () => { appendTerm('Connection lost', 'terr'); cutJob.close(); };
+}
+
+function renderCut() {
+  const t = TRIPS.find(x=>x.id===wbActive);
+  const n = _cutMeta.n || (sel[wbActive]?.size||0);
+  const dur = _cutMeta.dur || selDur(wbActive);
+  const sc = _cutMeta.scenes || [];
+  setContent(`<div class="cut-wrap">
+    <div class="cut-hd">
+      <div style="flex:1"><div class="cut-ti">${t?.name||'—'}</div><div class="cut-su">Cutting · ${n} scenes · ~${fmt(dur)}</div></div>
+    </div>
+    <div class="cut-body">
+      <div class="cut-l">
+        <div>
+          <div class="seclbl">Scenes</div>
+          <div class="spl" id="cut-scenes">
+            ${sc.map((s,i)=>`<div class="spli" id="csp-${s.id}">
+              <div class="spld dw" id="cpd-${s.id}"></div>
+              <div class="splinf"><div class="spln">${i+1}. ${s.file}</div><div class="splsub">${s.caption.slice(0,60)}</div></div>
+              <span class="spldur" id="cpv-${s.id}" style="color:var(--tx3)">${fmt(s.dur)}</span>
+            </div>`).join('')}
+          </div>
+        </div>
+        <div>
+          <div class="seclbl">Output</div>
+          <div class="term" id="cut-term"><span class="tcur"></span></div>
+        </div>
+      </div>
+      <div class="cut-r">
+        <div class="sc-card">
+          <div class="sclbl">Progress</div>
+          <div class="scrow"><span class="sck">Scenes</span><span class="scv" id="cp-scenes">0/${n}</span></div>
+          <div class="scrow"><span class="sck">Duration</span><span class="scv" id="cp-dur">0/${fmt(dur)}</span></div>
+          <div class="scrow"><span class="sck">Output</span><span class="scv" id="cp-size">—</span></div>
+          <div class="minitl"><div class="minif" id="cp-bar" style="width:0%"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>`);
+}
+
+function appendTerm(text, cls='') {
+  const term = document.getElementById('cut-term');
+  if (!term) return;
+  const span = document.createElement('div');
+  if (cls) span.className = cls;
+  span.textContent = text;
+  term.appendChild(span);
+  term.scrollTop = term.scrollHeight;
+}
+function handleCutEvent(msg) {
+  if (msg.type === 'start') {
+    appendTerm(`Cutting ${msg.n} scenes → ${msg.out.split('/').pop()}`);
+  } else if (msg.type === 'scene_start') {
+    appendTerm(`  [${msg.i}/${msg.n}] ${msg.file}  ${msg.s.toFixed(1)}→${msg.e.toFixed(1)}s`);
+    document.getElementById('cp-scenes').textContent = `${msg.i-1}/${msg.n}`;
+    document.getElementById('cp-bar').style.width = `${Math.round((msg.i-1)/msg.n*100)}%`;
+    // Mark active
+    const id = _cutMeta.scenes?.[msg.i-1]?.id;
+    if (id) {
+      const d = document.getElementById(`cpd-${id}`);
+      if (d) { d.className='spld da'; }
+      if (msg.i > 1) {
+        const prevId = _cutMeta.scenes?.[msg.i-2]?.id;
+        if (prevId) { const pd=document.getElementById(`cpd-${prevId}`); if(pd){pd.className='spld dd';pd.innerHTML='<svg width="7" height="5" viewBox="0 0 7 5"><path d="M1 2.5l1.5 1.5L6 1" stroke="#fff" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>';} }
+      }
+    }
+  } else if (msg.type === 'scene_done') {
+    const id = _cutMeta.scenes?.[msg.i-1]?.id;
+    if (id) {
+      const d=document.getElementById(`cpd-${id}`); if(d){d.className='spld dd';d.innerHTML='<svg width="7" height="5" viewBox="0 0 7 5"><path d="M1 2.5l1.5 1.5L6 1" stroke="#fff" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>';}
+      const v=document.getElementById(`cpv-${id}`); if(v){v.style.color='var(--go)';}
+    }
+    appendTerm(`      ✓ ${msg.kb} KB`, 'tok');
+  } else if (msg.type === 'concat') {
+    appendTerm('\nConcatenating…');
+    document.getElementById('cp-scenes').textContent = `${_cutMeta.n}/${_cutMeta.n}`;
+    document.getElementById('cp-bar').style.width = '90%';
+  } else if (msg.type === 'ffmpeg') {
+    appendTerm('  ' + msg.text, 'tdim');
+  } else if (msg.type === 'done') {
+    document.getElementById('cp-bar').style.width = '100%';
+    document.getElementById('cp-size').textContent = `${msg.mb} MB`;
+    appendTerm(`\n✓ ${msg.out.split('/').pop()}  (${msg.mb} MB, ${msg.dur}s)`, 'tok');
+    // Update trip status
+    const t = TRIPS.find(x=>x.id===wbActive);
+    if (t) { t.status='done'; t.reel_mb=msg.mb; }
+    renderOVList();
+    cutJob?.close(); cutJob = null;
+    setTimeout(() => goState('done'), 1200);
+  } else if (msg.type === 'error') {
+    appendTerm(`\n✗ ${msg.msg}`, 'terr');
+    cutJob?.close(); cutJob = null;
+  }
+}
+
+// ── DONE ──────────────────────────────────────────────────────────────
+function renderDone() {
+  const t = TRIPS.find(x=>x.id===wbActive);
+  if (!t) { setContent('<div class="empty"><div class="ei">✓</div><div class="em">No trip selected</div></div>'); return; }
+  const next = TRIPS.filter(x=>x.id!==wbActive&&x.status!=='done').slice(0,3);
+  const sc = _cutMeta.scenes || [];
+  setContent(`<div class="done-wrap">
+    <div class="done-hd">
+      <div class="done-ic"><svg width="13" height="13" viewBox="0 0 13 13"><path d="M2 6.5l3 3 6-6" stroke="var(--go)" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div style="flex:1">
+        <div class="done-ti">${t.name} — highlight ready</div>
+        <div class="done-su">output/staging/clips/${t.id}/highlight.mp4 · ${t.reel_mb||'?'} MB</div>
+        <div class="done-ac">
+          <button class="btn-s bp" onclick="playReel('${t.id}','${t.name}')">▶ Play reel</button>
+          <button class="btn-s bp" style="background:var(--go)" onclick="markFinal('${t.id}')">Mark final →</button>
+          <button class="btn-s bg" onclick="goState('review')">Edit</button>
+        </div>
+      </div>
+    </div>
+    <div class="done-bd">
+      <div class="sto-card">
+        <div class="sclbl" style="margin-bottom:7px">Storage impact</div>
+        <div class="scrow"><span class="sck">Raw (${t.clips} clips)</span><span class="scv">${t.raw_gb} GB</span></div>
+        <div class="scrow"><span class="sck">Highlight</span><span class="scv g">${t.reel_mb||'?'} MB</span></div>
+        <div class="scrow"><span class="sck">Saved</span><span class="scv g">${t.reel_mb?Math.round((1-t.reel_mb/(t.raw_gb*1000))*100):'?'}%</span></div>
+        <div class="scrow" style="margin-top:5px;padding-top:5px;border-top:1px solid var(--bd)"><span class="sck" style="color:var(--tx2)">Raw clips</span><span class="scv" style="color:var(--wa)">→ cold storage</span></div>
+      </div>
+      <div class="next-card">
+        <div class="nc-t">Up next</div>
+        ${next.map(n=>`<div class="ncr" onclick="selectTrip('${n.id}')">
+          <div><div class="ncn">${n.name}</div><div class="ncm">${n.date} · ${n.high} high scenes</div></div>
+          <svg width="5" height="9" viewBox="0 0 5 9"><path d="M1 1l3 3.5-3 3.5" stroke="var(--tx3)" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+        </div>`).join('')}
+      </div>
+      ${sc.length ? `<div class="sto-card" style="grid-column:1/-1"><div class="sclbl" style="margin-bottom:6px">Scenes included (${sc.length})</div>
+        ${sc.map((s,i)=>`<div class="scrow"><span class="sck" style="font-family:ui-monospace,monospace;font-size:10px">${i+1}. ${s.file}</span><span class="scv" style="font-size:10px">${fmt(s.dur)}</span></div>`).join('')}
+      </div>` : ''}
+    </div>
+  </div>`);
+}
+async function markFinal(tid) {
+  const r = await fetch('/api/mark-final', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({trip: tid})
+  }).then(r=>r.json());
+  const t = TRIPS.find(x=>x.id===tid);
+  if (t) t.status = 'done';
+  alert(`Moved to final/: ${r.moved?.map(m=>m.name).join(', ')}`);
+}
+
+// ── Inline scene player ───────────────────────────────────────────────
+function playRow(el) {
+  playScene(
+    decodeURIComponent(el.dataset.path),
+    +el.dataset.start,
+    +el.dataset.end,
+    decodeURIComponent(el.dataset.file),
+    el.dataset.sid,
+    el.dataset.tid
+  );
+}
+function playScene(path, start, end, label, sid, tid) {
+  wbPlayerSid = sid; wbPlayerTid = tid;
+  // Mark active row
+  document.querySelectorAll('.srow.playing').forEach(r => r.classList.remove('playing'));
+  if (sid) { const r = document.querySelector(`[data-sid="${sid}"]`); if (r) r.classList.add('playing'); }
+  // Show player panel
+  document.getElementById('wpl-ph').style.display = 'none';
+  document.getElementById('wpl-body').style.display = 'flex';
+  // Load video
+  const v = document.getElementById('vmov-wb');
+  v.src = `/api/video?path=${encodeURIComponent(path)}#t=${start},${end}`;
+  v.play().catch(()=>{});
+  // Render info
+  const on = tid && sel[tid]?.has(sid);
+  const ord = tid ? selOrd[tid]?.get(sid) : null;
+  const scene = tid ? (SCENES[tid]||[]).find(s => String(s.id) === String(sid)) : null;
+  document.getElementById('wpl-info').innerHTML = `
+    <div class="wpl-file">${label}</div>
+    <div class="wpl-tc">${fmt(start)} – ${fmt(end)} · ${fmt(end-start)}</div>
+    ${scene ? `<div class="wpl-tags">
+      <span class="ltag ${sCls(scene.score)}">${scene.score.toFixed(1)}</span>
+      ${scene.ai ? '<span class="ltag-ai">AI</span>' : ''}
+    </div>
+    <div class="wpl-cap">${scene.caption}</div>` : ''}
+    <div class="wpl-acts">
+      <button class="wpl-inc${on?' on':''}" id="wpl-inc-btn" onclick="togglePlayerInc()">
+        ${on ? `✓ In reel #${ord}` : '+ Include in reel'}
+      </button>
+      <button class="wpl-nav" onclick="stepWbPlayer(-1)">← prev</button>
+      <button class="wpl-nav" onclick="stepWbPlayer(1)">next →</button>
+    </div>`;
+}
+function togglePlayerInc() {
+  if (!wbPlayerTid || !wbPlayerSid) return;
+  tog(wbPlayerTid, wbPlayerSid);
+}
+function stepWbPlayer(dir) {
+  if (!wbActive) return;
+  let scenes = [...(SCENES[wbActive]||[])];
+  if (sfF==='ai')  scenes = scenes.filter(x=>x.ai);
+  if (sfF==='sel') scenes = scenes.filter(x=>sel[wbActive]?.has(x.id));
+  if (sfF==='hi')  scenes = scenes.filter(x=>x.score>=2.5);
+  if (sfF==='lo')  scenes = scenes.filter(x=>x.score<1.5);
+  if (ssS==='score') scenes = [...scenes].sort((a,b)=>b.score-a.score);
+  if (ssS==='dur')   scenes = [...scenes].sort((a,b)=>b.dur-a.dur);
+  const idx = scenes.findIndex(s => String(s.id) === String(wbPlayerSid));
+  const next = scenes[idx + dir];
+  if (next) playScene(next.path, next.start, next.end, next.file, String(next.id), wbActive);
+}
+
+// ── Reel modal (Done state) ───────────────────────────────────────────
+function playReel(tid, name) {
+  const v = document.getElementById('vmov');
+  v.src = `/api/reel?trip=${encodeURIComponent(tid)}`;
+  document.getElementById('vhd-t').textContent = `${name} — highlight reel`;
+  document.getElementById('vhd-m').textContent = '';
+  document.getElementById('vmodal').classList.add('open');
+  v.play().catch(()=>{});
+}
+function closeVid(e) {
+  if (e && e.target !== document.getElementById('vmodal')) return;
+  const v = document.getElementById('vmov');
+  v.pause(); v.src = '';
+  document.getElementById('vmodal').classList.remove('open');
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeVid({target:document.getElementById('vmodal')}); });
+
+// ── Shared ────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.pane').forEach(p=>p.classList.remove('on'));
+  document.getElementById('pane-'+tab).classList.add('on');
+  document.getElementById('n-ov').classList.toggle('on',tab==='ov');
+  document.getElementById('n-wb').classList.toggle('on',tab==='wb');
+  if (tab === 'wb' && ovActive !== wbActive) selectTrip(ovActive);
+  requestAnimationFrame(paintAll);
+}
+function toggleTheme() {
+  const r = document.documentElement;
+  r.setAttribute('data-theme', r.getAttribute('data-theme')==='dark'?'light':'dark');
+}
+
+init();
+</script>
+</body>
+</html>
